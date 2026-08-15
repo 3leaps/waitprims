@@ -1,7 +1,8 @@
 //! RFC 8785 JSON Canonicalization Scheme (JCS).
 //!
-//! Ordinary `serde_json::to_string` and `jq -S` are not JCS. This module
-//! parses with I-JSON constraints and emits the full canonical document.
+//! Ordinary `serde_json::to_string` and `jq -S` are not JCS. Public entry
+//! is raw JSON / bytes through a duplicate-aware parser. A `Value` may be
+//! encoded only after that parser has guaranteed uniqueness.
 
 use serde_json::{Map, Value};
 use thiserror::Error;
@@ -31,12 +32,18 @@ pub enum JcsError {
 
 /// Parse JSON with I-JSON / RFC 8785 constraints, then canonicalize.
 pub fn canonicalize_json(raw: &str) -> Result<Vec<u8>, JcsError> {
-    let value = parse_strict(raw)?;
-    canonicalize(&value)
+    canonicalize_bytes(raw.as_bytes())
 }
 
-/// Canonicalize a JSON value per RFC 8785.
-pub fn canonicalize(value: &Value) -> Result<Vec<u8>, JcsError> {
+/// Parse UTF-8 JSON bytes with I-JSON / RFC 8785 constraints, then canonicalize.
+pub fn canonicalize_bytes(raw: &[u8]) -> Result<Vec<u8>, JcsError> {
+    let text = std::str::from_utf8(raw).map_err(|_| JcsError::InvalidJson)?;
+    let value = parse_strict(text)?;
+    encode_unique(&value)
+}
+
+/// Encode a value that was produced by [`parse_strict`] (uniqueness guaranteed).
+pub(crate) fn encode_unique(value: &Value) -> Result<Vec<u8>, JcsError> {
     let mut out = String::new();
     encode(value, &mut out)?;
     Ok(out.into_bytes())

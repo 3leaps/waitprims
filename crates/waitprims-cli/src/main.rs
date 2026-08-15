@@ -7,9 +7,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use serde_json::Value;
 use tracing::info;
-use waitprims_core::{resolve_bundled, validate_documents, CAPABILITY, PINNED_CRUCIBLE_SHA};
+use waitprims_core::{resolve_bundled, validate_raw_documents, CAPABILITY, PINNED_CRUCIBLE_SHA};
 
 /// Diagnostic CLI for the waitprims library.
 ///
@@ -129,13 +128,13 @@ fn print_schema() -> Result<(), waitprims_core::Error> {
 
 fn validate_path(path: &Path) -> Result<usize, waitprims_core::Error> {
     let documents = load_documents(path)?;
-    let typed = validate_documents(&documents)?;
+    let typed = validate_raw_documents(&documents)?;
     Ok(typed.len())
 }
 
-fn load_documents(path: &Path) -> Result<Vec<Value>, waitprims_core::Error> {
+fn load_documents(path: &Path) -> Result<Vec<String>, waitprims_core::Error> {
     if path.is_file() {
-        return Ok(vec![read_json(path)?]);
+        return Ok(vec![read_raw(path)?]);
     }
     if path.is_dir() {
         let mut files = Vec::new();
@@ -144,7 +143,7 @@ fn load_documents(path: &Path) -> Result<Vec<Value>, waitprims_core::Error> {
         if files.is_empty() {
             return Err(waitprims_core::ValidationError::new("/", "empty_target").into());
         }
-        return files.iter().map(|p| read_json(p)).collect();
+        return files.iter().map(|p| read_raw(p)).collect();
     }
     Err(waitprims_core::Error::Contract {
         path: "target",
@@ -172,7 +171,6 @@ fn collect_json(dir: &Path, files: &mut Vec<PathBuf>) -> Result<(), waitprims_co
     Ok(())
 }
 
-fn read_json(path: &Path) -> Result<Value, waitprims_core::Error> {
-    let raw = fs::read_to_string(path).map_err(|_| waitprims_core::Error::MalformedJson)?;
-    serde_json::from_str(&raw).map_err(|_| waitprims_core::Error::MalformedJson)
+fn read_raw(path: &Path) -> Result<String, waitprims_core::Error> {
+    fs::read_to_string(path).map_err(|_| waitprims_core::Error::MalformedJson)
 }

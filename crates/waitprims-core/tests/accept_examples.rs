@@ -2,9 +2,9 @@
 
 mod support;
 
-use waitprims_core::validate_documents;
+use waitprims_core::validate_message;
 
-use crate::support::{json_files, load_json, vendor_root};
+use crate::support::{json_files, load_raw, vendor_root};
 
 #[test]
 fn accept_all_examples() {
@@ -16,8 +16,8 @@ fn accept_all_examples() {
         examples.display()
     );
     for path in files {
-        let document = load_json(&path);
-        validate_documents(&[document]).unwrap_or_else(|e| {
+        let raw = load_raw(&path);
+        validate_message(&raw).unwrap_or_else(|e| {
             panic!("example must be accepted: {}: {e}", path.display());
         });
     }

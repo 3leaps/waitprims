@@ -7,9 +7,9 @@ mod support;
 
 use std::fs;
 
-use waitprims_core::{validate_documents, Error, NormativeReason};
+use waitprims_core::{validate_raw_documents, Error, NormativeReason};
 
-use crate::support::{json_files, load_dir_documents, load_json, vendor_root};
+use crate::support::{json_files, load_dir_raw, load_raw, vendor_root};
 
 fn expected_reason(name: &str) -> Option<NormativeReason> {
     if name.contains("deadline-ordering") {
@@ -49,8 +49,8 @@ fn expected_reason(name: &str) -> Option<NormativeReason> {
     }
 }
 
-fn assert_rejected(label: &str, documents: &[serde_json::Value], want: Option<NormativeReason>) {
-    match validate_documents(documents) {
+fn assert_rejected(label: &str, documents: &[String], want: Option<NormativeReason>) {
+    match validate_raw_documents(documents) {
         Ok(_) => panic!("control must be rejected: {label}"),
         Err(Error::Validation(err)) => {
             if let Some(want) = want {
@@ -71,8 +71,8 @@ fn assert_rejected(label: &str, documents: &[serde_json::Value], want: Option<No
     }
 }
 
-fn assert_accepted(label: &str, documents: &[serde_json::Value]) {
-    validate_documents(documents)
+fn assert_accepted(label: &str, documents: &[String]) {
+    validate_raw_documents(documents)
         .unwrap_or_else(|e| panic!("baseline must be accepted: {label}: {e}"));
 }
 
@@ -82,7 +82,7 @@ fn reject_all_schema_controls() {
     let mut rejects = 0usize;
     for path in json_files(&dir) {
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        let document = load_json(&path);
+        let document = load_raw(&path);
         if name.starts_with("reject-") {
             rejects += 1;
             assert_rejected(&path.display().to_string(), &[document], None);
@@ -99,7 +99,7 @@ fn reject_all_normative_controls() {
     let mut rejects = 0usize;
     for path in json_files(&dir) {
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        let document = load_json(&path);
+        let document = load_raw(&path);
         if name.starts_with("reject-") {
             rejects += 1;
             assert_rejected(
@@ -125,7 +125,7 @@ fn reject_all_set_controls() {
             continue;
         }
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        let documents = load_dir_documents(&path);
+        let documents = load_dir_raw(&path);
         assert!(
             !documents.is_empty(),
             "set directory has no JSON: {}",

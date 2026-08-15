@@ -15,9 +15,9 @@ pub mod validate;
 pub use contract::{
     resolve_bundled, resolve_from_dir, ResolvedContract, CAPABILITY, PINNED_CRUCIBLE_SHA,
 };
-pub use digest::{registration_digest, sha256_hex, verify_registration_digest};
+pub use digest::registration_digest;
 pub use error::{Error, NormativeReason, Result, ValidationError};
 pub use refs::{ActorRef, CapabilityToken, IdToken, OpaqueRef, PredicateRef};
-pub use time::OffsetDateTime;
+pub use rfc3339::Timestamp;
 pub use types::{AgentWaitMessage, MessageType};
-pub use validate::{validate_documents, validate_message, validate_value};
+pub use validate::{validate_message, validate_raw_documents};

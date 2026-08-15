@@ -39,22 +39,33 @@ fn compiled_entry_schema() -> Result<&'static Validator> {
 }
 
 /// Validate one JSON document as an `agent-wait/v0` message.
+///
+/// Entry is raw JSON so JCS uniqueness is checked before any typed value
+/// path can collapse duplicate keys.
 pub fn validate_message(raw: &str) -> Result<AgentWaitMessage> {
-    let value: Value = serde_json::from_str(raw).map_err(|_| Error::MalformedJson)?;
-    validate_value(&value)
-}
-
-/// Validate one parsed JSON value as an `agent-wait/v0` message.
-pub fn validate_value(value: &Value) -> Result<AgentWaitMessage> {
-    let messages = validate_documents(std::slice::from_ref(value))?;
+    let messages = validate_raw_documents(std::iter::once(raw))?;
     messages
         .into_iter()
         .next()
         .ok_or_else(|| Error::from(ValidationError::new("/", "empty_document")))
 }
 
-/// Validate one or more documents. Set rules run across the whole slice.
-pub fn validate_documents(documents: &[Value]) -> Result<Vec<AgentWaitMessage>> {
+/// Validate one or more raw JSON documents. Set rules run across the slice.
+pub fn validate_raw_documents<I, S>(raws: I) -> Result<Vec<AgentWaitMessage>>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut documents = Vec::new();
+    for raw in raws {
+        documents.push(crate::jcs::parse_strict(raw.as_ref())?);
+    }
+    validate_documents(&documents)
+}
+
+/// Validate one or more already-unique documents. Callers must have parsed
+/// with [`crate::jcs::parse_strict`].
+fn validate_documents(documents: &[Value]) -> Result<Vec<AgentWaitMessage>> {
     if documents.is_empty() {
         return Err(ValidationError::new("/", "empty_target").into());
     }

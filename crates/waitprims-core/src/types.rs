@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::refs::{ActorRef, CapabilityToken, IdToken, OpaqueRef, PredicateRef};
+use crate::rfc3339::Timestamp;
 
 /// Discriminated `agent-wait/v0` message.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -88,7 +89,7 @@ pub struct RegistrationSet {
     /// Correlation identifier.
     pub correlation_id: IdToken,
     /// Message creation timestamp.
-    pub created_at: String,
+    pub created_at: Timestamp,
     /// Actor identity reference.
     pub actor_ref: ActorRef,
     /// Optional causation identifier.
@@ -112,7 +113,7 @@ pub struct RegistrationSet {
     /// Registration snapshot revision.
     pub registration_revision: IdToken,
     /// Logical deadline.
-    pub logical_deadline: String,
+    pub logical_deadline: Timestamp,
     /// Aggregate authentication posture.
     pub authn_mode: AuthnMode,
     /// Aggregate event/byte limits.
@@ -143,7 +144,7 @@ pub struct Registration {
     /// Capability reference for the registration.
     pub capability_ref: OpaqueRef,
     /// Lease expiry timestamp.
-    pub lease_expires_at: String,
+    pub lease_expires_at: Timestamp,
     /// Per-registration bounds.
     pub bounds: WaitBound,
     /// Exclusive continuation cursor. XOR with `baseline_policy`.
@@ -164,7 +165,7 @@ pub struct LiveWaitRequest {
     /// Correlation identifier.
     pub correlation_id: IdToken,
     /// Message creation timestamp.
-    pub created_at: String,
+    pub created_at: Timestamp,
     /// Actor identity reference.
     pub actor_ref: ActorRef,
     /// Optional causation identifier.
@@ -186,9 +187,9 @@ pub struct LiveWaitRequest {
     /// Frozen registration revision.
     pub registration_revision: IdToken,
     /// Logical deadline.
-    pub logical_deadline: String,
+    pub logical_deadline: Timestamp,
     /// Run deadline. Must be `<= logical_deadline`.
-    pub run_deadline: String,
+    pub run_deadline: Timestamp,
 }
 
 /// `live_wait_outcome` body.
@@ -201,7 +202,7 @@ pub struct LiveWaitOutcome {
     /// Correlation identifier.
     pub correlation_id: IdToken,
     /// Message creation timestamp.
-    pub created_at: String,
+    pub created_at: Timestamp,
     /// Actor identity reference.
     pub actor_ref: ActorRef,
     /// Optional causation identifier.
@@ -221,12 +222,12 @@ pub struct LiveWaitOutcome {
     /// Referenced request message id.
     pub request_ref: IdToken,
     /// Completion timestamp.
-    pub completed_at: String,
+    pub completed_at: Timestamp,
     /// Outcome kind.
     pub outcome_kind: OutcomeKind,
     /// Logical deadline when required by the kind.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub logical_deadline: Option<String>,
+    pub logical_deadline: Option<Timestamp>,
     /// Matched events.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub events: Option<Vec<WaitEvent>>,
@@ -254,7 +255,7 @@ pub struct PollCycleRequest {
     /// Correlation identifier.
     pub correlation_id: IdToken,
     /// Message creation timestamp.
-    pub created_at: String,
+    pub created_at: Timestamp,
     /// Actor identity reference.
     pub actor_ref: ActorRef,
     /// Optional causation identifier.
@@ -276,9 +277,9 @@ pub struct PollCycleRequest {
     /// Frozen registration revision.
     pub registration_revision: IdToken,
     /// Logical deadline.
-    pub logical_deadline: String,
+    pub logical_deadline: Timestamp,
     /// Run deadline. Must be `<= logical_deadline`.
-    pub run_deadline: String,
+    pub run_deadline: Timestamp,
     /// Required coverage arm ids.
     pub required_arms: Vec<IdToken>,
     /// Fairness cursor for this cycle.
@@ -304,7 +305,7 @@ pub struct PollCycleOutcome {
     /// Correlation identifier.
     pub correlation_id: IdToken,
     /// Message creation timestamp.
-    pub created_at: String,
+    pub created_at: Timestamp,
     /// Actor identity reference.
     pub actor_ref: ActorRef,
     /// Optional causation identifier.
@@ -324,9 +325,9 @@ pub struct PollCycleOutcome {
     /// Referenced request message id.
     pub request_ref: IdToken,
     /// Completion timestamp.
-    pub completed_at: String,
+    pub completed_at: Timestamp,
     /// Logical deadline.
-    pub logical_deadline: String,
+    pub logical_deadline: Timestamp,
     /// Outcome kind.
     pub outcome_kind: OutcomeKind,
     /// Events observed this cycle.
@@ -366,7 +367,7 @@ pub struct PollCycleAck {
     /// Correlation identifier.
     pub correlation_id: IdToken,
     /// Message creation timestamp.
-    pub created_at: String,
+    pub created_at: Timestamp,
     /// Actor identity reference.
     pub actor_ref: ActorRef,
     /// Optional causation identifier.
@@ -495,9 +496,9 @@ pub struct WaitEvent {
     /// Subject identifier.
     pub subject_id: IdToken,
     /// Provider-occurred timestamp.
-    pub occurred_at: String,
+    pub occurred_at: Timestamp,
     /// Observation timestamp.
-    pub observed_at: String,
+    pub observed_at: Timestamp,
     /// Exclusive start cursor for this observation.
     pub start_anchor: Anchor,
     /// Proposed exclusive continuation.

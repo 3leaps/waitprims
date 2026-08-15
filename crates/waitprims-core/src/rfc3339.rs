@@ -3,38 +3,122 @@
 //! Accepted: extended date/time with seconds and `Z`/`z` or a
 //! colon-separated numeric offset. Leap seconds are rejected, not clamped.
 //! Equivalent offsets compare as the same instant.
+//!
+//! Construction and comparison go through [`Timestamp`]. The `time` crate
+//! is an implementation ingredient, not the public gate.
 
 use std::cmp::Ordering;
+use std::fmt;
 
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use time::{Date, Month, OffsetDateTime, PrimitiveDateTime, Time, UtcOffset};
 
 use crate::error::{NormativeReason, ValidationError};
 
-/// Parse a fail-closed RFC3339 timestamp to a UTC instant.
-pub fn parse(text: &str) -> Result<OffsetDateTime, ValidationError> {
-    parse_inner(text).map_err(|_| {
-        ValidationError::normative(
-            "/timestamp",
-            "rfc3339_profile",
-            NormativeReason::UnparseableTimestamp,
-        )
-    })
+/// Contract timestamp on the pinned RFC3339 profile.
+///
+/// Equality and ordering use the normalized UTC instant, so equivalent
+/// offsets compare equal. The original wire spelling is preserved for
+/// serialization.
+#[derive(Clone)]
+pub struct Timestamp {
+    raw: String,
+    instant: OffsetDateTime,
+}
+
+impl Timestamp {
+    /// Parse a fail-closed RFC3339 timestamp.
+    pub fn parse(text: &str) -> Result<Self, ValidationError> {
+        let instant = parse_instant(text).map_err(|_| {
+            ValidationError::normative(
+                "/timestamp",
+                "rfc3339_profile",
+                NormativeReason::UnparseableTimestamp,
+            )
+        })?;
+        Ok(Self {
+            raw: text.to_string(),
+            instant,
+        })
+    }
+
+    /// Borrow the original wire spelling.
+    pub fn as_str(&self) -> &str {
+        &self.raw
+    }
+
+    /// Compare two timestamps after normalizing to UTC instants.
+    ///
+    /// Returns -1, 0, or 1.
+    pub fn compare(&self, other: &Self) -> i8 {
+        match self.instant.cmp(&other.instant) {
+            Ordering::Less => -1,
+            Ordering::Equal => 0,
+            Ordering::Greater => 1,
+        }
+    }
+}
+
+impl PartialEq for Timestamp {
+    fn eq(&self, other: &Self) -> bool {
+        self.instant == other.instant
+    }
+}
+
+impl Eq for Timestamp {}
+
+impl PartialOrd for Timestamp {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Timestamp {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.instant.cmp(&other.instant)
+    }
+}
+
+impl fmt::Debug for Timestamp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Timestamp")
+            .field("profile", &self.raw)
+            .finish()
+    }
+}
+
+impl fmt::Display for Timestamp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.raw)
+    }
+}
+
+impl Serialize for Timestamp {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.raw)
+    }
+}
+
+impl<'de> Deserialize<'de> for Timestamp {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(deserializer)?;
+        Timestamp::parse(&raw).map_err(serde::de::Error::custom)
+    }
+}
+
+/// Parse a fail-closed RFC3339 timestamp.
+pub fn parse(text: &str) -> Result<Timestamp, ValidationError> {
+    Timestamp::parse(text)
 }
 
 /// Compare two timestamps after normalizing to UTC instants.
 ///
 /// Returns -1, 0, or 1.
 pub fn compare(left: &str, right: &str) -> Result<i8, ValidationError> {
-    let a = parse(left)?;
-    let b = parse(right)?;
-    Ok(match a.cmp(&b) {
-        Ordering::Less => -1,
-        Ordering::Equal => 0,
-        Ordering::Greater => 1,
-    })
+    Ok(Timestamp::parse(left)?.compare(&Timestamp::parse(right)?))
 }
 
-fn parse_inner(text: &str) -> Result<OffsetDateTime, ()> {
+fn parse_instant(text: &str) -> Result<OffsetDateTime, ()> {
     if text.is_empty() || text != text.trim() {
         return Err(());
     }
@@ -154,13 +238,16 @@ mod tests {
 
     fn reject(label: &str, text: &str) {
         assert!(
-            parse(text).is_err(),
+            Timestamp::parse(text).is_err(),
             "{label}: expected reject of timestamp"
         );
     }
 
     fn accept(label: &str, text: &str) {
-        assert!(parse(text).is_ok(), "{label}: expected accept of timestamp");
+        assert!(
+            Timestamp::parse(text).is_ok(),
+            "{label}: expected accept of timestamp"
+        );
     }
 
     #[test]
@@ -216,5 +303,14 @@ mod tests {
             compare("2026-08-15T16:00:10Z", "2026-08-15T17:00:00+01:00").unwrap(),
             1
         );
+    }
+
+    #[test]
+    fn equivalent_offsets_are_equal_on_the_newtype() {
+        let z = Timestamp::parse("2026-08-15T17:00:00Z").unwrap();
+        let offset = Timestamp::parse("2026-08-15T17:00:00+00:00").unwrap();
+        assert_eq!(z, offset);
+        assert_eq!(z.as_str(), "2026-08-15T17:00:00Z");
+        assert_eq!(offset.as_str(), "2026-08-15T17:00:00+00:00");
     }
 }

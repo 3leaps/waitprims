@@ -3,15 +3,12 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde_json::Value;
-
 pub fn vendor_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../schemas/v0")
 }
 
-pub fn load_json(path: &Path) -> Value {
-    let raw = fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-    serde_json::from_str(&raw).unwrap_or_else(|e| panic!("parse {}: {e}", path.display()))
+pub fn load_raw(path: &Path) -> String {
+    fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
 }
 
 pub fn json_files(dir: &Path) -> Vec<PathBuf> {
@@ -33,6 +30,6 @@ fn walk(dir: &Path, files: &mut Vec<PathBuf>) {
     }
 }
 
-pub fn load_dir_documents(dir: &Path) -> Vec<Value> {
-    json_files(dir).iter().map(|p| load_json(p)).collect()
+pub fn load_dir_raw(dir: &Path) -> Vec<String> {
+    json_files(dir).iter().map(|p| load_raw(p)).collect()
 }
