@@ -52,6 +52,8 @@ refs when a caller uses them.
 
 This tree is an early scaffold (`0.1.0-dev`). APIs are not stable.
 
+Pinned `contract: agent-wait/v0` at Crucible `f1912957cde19b2b1e7809e430cc28dc417287cc`. See [`schemas/v0/PIN.md`](schemas/v0/PIN.md).
+
 ## Development
 
 ```bash

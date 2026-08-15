@@ -1,0 +1,49 @@
+{
+  "capabilities": ["contract: agent-wait/v0"],
+  "message_type": "live_wait_outcome",
+  "message_id": "msg:aw-live-out-1",
+  "correlation_id": "corr:aw-1",
+  "created_at": "2026-08-15T16:08:00Z",
+  "actor_ref": "seat:provider-wait",
+  "causation_id": "msg:aw-live-req-1",
+  "waiter_id": "waiter:seat-consumer-a",
+  "request_ref": "msg:aw-live-req-1",
+  "events": [
+    {
+      "event_id": "evt:job-complete-1",
+      "method_id": "job_complete",
+      "subject_kind": "service_job",
+      "subject_id": "job:transcribe-1",
+      "occurred_at": "2026-08-15T16:07:30Z",
+      "body": {
+        "text": "embedded-payload"
+      },
+      "payload": {
+        "payload_ref": "urn:uuid:00000000-0000-7000-8000-000000000601",
+        "content_digest": {
+          "algorithm": "sha256",
+          "value": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        }
+      },
+      "registration_id": "reg:job-complete-1",
+      "source_instance_ref": "source:provider-a",
+      "observed_at": "2026-08-15T16:07:30Z",
+      "start_anchor": {
+        "kind": "provider_opaque",
+        "value": "anc:cursor-0"
+      },
+      "proposed_next_anchor": {
+        "kind": "provider_opaque",
+        "value": "anc:job-complete-1"
+      },
+      "replay_status": "fresh",
+      "correlation_id": "corr:aw-1"
+    }
+  ],
+  "proposed_next_anchor": {
+    "kind": "provider_opaque",
+    "value": "anc:job-complete-1"
+  },
+  "outcome_kind": "events",
+  "completed_at": "2026-08-15T16:08:00Z"
+}

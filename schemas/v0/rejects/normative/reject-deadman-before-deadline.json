@@ -1,0 +1,53 @@
+{
+  "capabilities": ["contract: agent-wait/v0"],
+  "message_type": "poll_cycle_outcome",
+  "message_id": "msg:aw-poll-out-1",
+  "correlation_id": "corr:aw-1",
+  "created_at": "2026-08-15T16:04:00Z",
+  "actor_ref": "seat:provider-wait",
+  "causation_id": "msg:aw-poll-req-1",
+  "waiter_id": "waiter:seat-consumer-a",
+  "request_ref": "msg:aw-poll-req-1",
+  "completed_at": "2026-08-15T16:04:00Z",
+  "logical_deadline": "2026-08-15T17:00:00Z",
+  "outcome_kind": "logical_deadman",
+  "events": [],
+  "coverage_complete": true,
+  "arms": [
+    {
+      "arm_id": "arm:primary",
+      "required": true,
+      "status": "no_change",
+      "degraded": false,
+      "registration_id": "reg:job-complete-1",
+      "start_anchor": {
+        "kind": "provider_opaque",
+        "value": "anc:cursor-0"
+      },
+      "proposed_next_anchor": {
+        "kind": "provider_opaque",
+        "value": "anc:cursor-0"
+      },
+      "event_count": 0,
+      "byte_count": 0,
+      "reason_code": "coverage_note"
+    }
+  ],
+  "retained_through": {
+    "reg:job-complete-1": {
+      "kind": "provider_opaque",
+      "value": "anc:cursor-0"
+    }
+  },
+  "fairness_cursor": "fair:start",
+  "next_fairness_cursor": "fair:arm-primary",
+  "retained_events": {
+    "reg:job-complete-1": []
+  },
+  "proposed_next_anchors": {
+    "reg:job-complete-1": {
+      "kind": "provider_opaque",
+      "value": "anc:cursor-0"
+    }
+  }
+}

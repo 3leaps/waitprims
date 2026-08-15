@@ -2,8 +2,14 @@
 //!
 //! Argument parsing and output only. Library crates own the logic.
 
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
+
 use clap::{Parser, Subcommand, ValueEnum};
+use serde_json::Value;
 use tracing::info;
+use waitprims_core::{resolve_bundled, validate_documents, CAPABILITY, PINNED_CRUCIBLE_SHA};
 
 /// Diagnostic CLI for the waitprims library.
 ///
@@ -27,7 +33,10 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 enum Command {
     /// Validate one message or a directory of messages.
-    Validate,
+    Validate {
+        /// File or directory of `agent-wait/v0` JSON documents.
+        path: PathBuf,
+    },
     /// Replay a scripted live first-match wait.
     Wait,
     /// Replay a scripted poll cycle.
@@ -56,7 +65,7 @@ fn init_tracing(format: LogFormat, level: tracing::Level) {
     }
 }
 
-fn main() {
+fn main() -> ExitCode {
     let cli = Cli::parse();
     init_tracing(cli.log_format, cli.log_level);
 
@@ -67,17 +76,103 @@ fn main() {
 Diagnostic CLI. The library is the product; there is no daemon.",
                 env!("CARGO_PKG_VERSION")
             );
+            ExitCode::SUCCESS
         }
+        Some(Command::Schema) => match print_schema() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("waitprims schema: {err}");
+                ExitCode::from(1)
+            }
+        },
+        Some(Command::Validate { path }) => match validate_path(&path) {
+            Ok(count) => {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "ok": true,
+                        "documents": count
+                    })
+                );
+                ExitCode::SUCCESS
+            }
+            Err(err) => {
+                eprintln!("waitprims validate: {err}");
+                ExitCode::from(1)
+            }
+        },
         Some(command) => {
             let name = match command {
-                Command::Validate => "validate",
                 Command::Wait => "wait",
                 Command::Poll => "poll",
-                Command::Schema => "schema",
+                Command::Validate { .. } | Command::Schema => unreachable!(),
             };
             info!(command = name, "subcommand is not implemented yet");
             eprintln!("waitprims {name}: not implemented yet");
-            std::process::exit(1);
+            ExitCode::from(1)
         }
     }
+}
+
+fn print_schema() -> Result<(), waitprims_core::Error> {
+    let resolved = resolve_bundled(CAPABILITY)?;
+    println!(
+        "{}",
+        serde_json::json!({
+            "capability": resolved.capability,
+            "entry_schema": resolved.entry_schema_name,
+            "crucible_sha": PINNED_CRUCIBLE_SHA
+        })
+    );
+    Ok(())
+}
+
+fn validate_path(path: &Path) -> Result<usize, waitprims_core::Error> {
+    let documents = load_documents(path)?;
+    let typed = validate_documents(&documents)?;
+    Ok(typed.len())
+}
+
+fn load_documents(path: &Path) -> Result<Vec<Value>, waitprims_core::Error> {
+    if path.is_file() {
+        return Ok(vec![read_json(path)?]);
+    }
+    if path.is_dir() {
+        let mut files = Vec::new();
+        collect_json(path, &mut files)?;
+        files.sort();
+        if files.is_empty() {
+            return Err(waitprims_core::ValidationError::new("/", "empty_target").into());
+        }
+        return files.iter().map(|p| read_json(p)).collect();
+    }
+    Err(waitprims_core::Error::Contract {
+        path: "target",
+        constraint: "missing_or_unreadable",
+    })
+}
+
+fn collect_json(dir: &Path, files: &mut Vec<PathBuf>) -> Result<(), waitprims_core::Error> {
+    let entries = fs::read_dir(dir).map_err(|_| waitprims_core::Error::Contract {
+        path: "target",
+        constraint: "missing_or_unreadable",
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|_| waitprims_core::Error::Contract {
+            path: "target",
+            constraint: "missing_or_unreadable",
+        })?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_json(&path, files)?;
+        } else if path.extension().and_then(|e| e.to_str()) == Some("json") {
+            files.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn read_json(path: &Path) -> Result<Value, waitprims_core::Error> {
+    let raw = fs::read_to_string(path).map_err(|_| waitprims_core::Error::MalformedJson)?;
+    serde_json::from_str(&raw).map_err(|_| waitprims_core::Error::MalformedJson)
 }
