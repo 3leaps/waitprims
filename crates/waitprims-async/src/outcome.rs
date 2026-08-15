@@ -26,8 +26,7 @@ fn coverage_arm(
 ) -> Option<CoverageArm> {
     let start = event
         .map(|ev| ev.start_anchor.clone())
-        .or_else(|| resolved_start.cloned())
-        .or_else(|| registration.start_anchor.clone())?;
+        .or_else(|| resolved_start.cloned())?;
     let proposed = event
         .map(|ev| ev.proposed_next_anchor.clone())
         .unwrap_or_else(|| start.clone());

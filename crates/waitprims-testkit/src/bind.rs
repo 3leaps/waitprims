@@ -93,8 +93,8 @@ impl BindHandle for TrackedBind {
         &self.registration_id
     }
 
-    fn resolved_start(&self) -> Option<&Anchor> {
-        Some(&self.resolved_start)
+    fn resolved_start(&self) -> &Anchor {
+        &self.resolved_start
     }
 }
 

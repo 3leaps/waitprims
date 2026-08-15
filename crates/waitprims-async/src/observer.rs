@@ -16,7 +16,10 @@ pub trait BindHandle: Send + Sync + Unpin {
     fn registration_id(&self) -> &IdToken;
 
     /// Exclusive start cursor resolved at bind. Never a policy label.
-    fn resolved_start(&self) -> Option<&Anchor>;
+    ///
+    /// Every successful bind must expose this cursor. There is no optional
+    /// or pending start after `bind()` returns.
+    fn resolved_start(&self) -> &Anchor;
 }
 
 /// One observation from a bound registration.

@@ -403,6 +403,78 @@ async fn baseline_policy_idle_wait_is_admitted_logical_deadman() {
     );
 }
 
+async fn hanging_required_bind_at_deadline(
+    set: waitprims_core::RegistrationSet,
+    hang: &[&str],
+    logical: &str,
+    run: &str,
+) {
+    let mut request = live_wait_request();
+    request.logical_deadline = ts(logical);
+    request.run_deadline = ts(run);
+    let clock = FakeClock::auto(request.created_at.clone());
+    let observer = ScriptedObserver::new(Script::default(), clock.clone());
+    for registration_id in hang {
+        observer.hang_bind(registration_id);
+    }
+    let outcome = run_first_match(&set, &request, &observer, &clock, &Cancel::new())
+        .await
+        .expect("terminal outcome");
+    admit(&outcome);
+    assert_ne!(
+        outcome.outcome_kind,
+        OutcomeKind::NoChange,
+        "incomplete required bind must not be clean no_change"
+    );
+    assert_ne!(
+        outcome.outcome_kind,
+        OutcomeKind::LogicalDeadman,
+        "incomplete required bind must not be clean logical_deadman"
+    );
+    assert_ne!(
+        outcome.coverage_complete,
+        Some(true),
+        "incomplete required bind must not claim coverage_complete"
+    );
+    assert_eq!(outcome.outcome_kind, OutcomeKind::Failed);
+    assert_eq!(
+        outcome.reason_code.as_ref().map(|code| code.as_str()),
+        Some("required_bind_pending")
+    );
+    assert_eq!(observer.live_bind_count(), 0);
+}
+
+#[tokio::test]
+async fn hanging_required_bind_at_run_deadline_is_failed_not_clean() {
+    let run = "2026-08-15T16:20:00Z";
+    let logical = "2026-08-15T17:00:00Z";
+    for set in [three_arm_set(), three_arm_baseline_set()] {
+        hanging_required_bind_at_deadline(set.clone(), &["reg:chanvoy-1"], logical, run).await;
+        hanging_required_bind_at_deadline(
+            set,
+            &["reg:chanvoy-1", "reg:sms-1", "reg:job-1"],
+            logical,
+            run,
+        )
+        .await;
+    }
+}
+
+#[tokio::test]
+async fn hanging_required_bind_at_logical_deadline_is_failed_not_clean() {
+    let at = "2026-08-15T16:02:00Z";
+    for set in [three_arm_set(), three_arm_baseline_set()] {
+        hanging_required_bind_at_deadline(set.clone(), &["reg:chanvoy-1"], at, at).await;
+        hanging_required_bind_at_deadline(
+            set,
+            &["reg:chanvoy-1", "reg:sms-1", "reg:job-1"],
+            at,
+            at,
+        )
+        .await;
+    }
+}
+
 #[tokio::test]
 async fn hanging_cancel_does_not_delay_decided_outcome() {
     let set = two_arm_set();

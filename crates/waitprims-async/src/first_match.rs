@@ -30,7 +30,9 @@ const BACKOFF_MS: &[u64] = &[50, 100, 200, 400, 800, 1000];
 ///
 /// Bind, next, cancel, and both deadlines share one race. Binding is not a
 /// serial preamble. A `baseline_policy` start is resolved to an exclusive
-/// provider cursor at bind and kept for coverage. After a decision the
+/// provider cursor at bind and kept for coverage. A required registration
+/// still pending bind at a terminal deadline is `failed`, never a
+/// clean-complete `no_change` / `logical_deadman`. After a decision the
 /// runner drops binds; it does not await [`Observer::cancel`]. Emits a
 /// `live_wait_outcome` body. Callers serialize
 /// [`waitprims_core::AgentWaitMessage::LiveWaitOutcome`] for the wire.
@@ -74,15 +76,13 @@ async fn bind_then_observe<O: Observer>(
 }
 
 fn record_resolved<B: BindHandle>(resolved: &Mutex<Vec<ResolvedStart>>, bind: &B) {
-    if let Some(start) = bind.resolved_start() {
-        resolved
-            .lock()
-            .expect("resolved-start")
-            .push(ResolvedStart {
-                registration_id: bind.registration_id().clone(),
-                start: start.clone(),
-            });
-    }
+    resolved
+        .lock()
+        .expect("resolved-start")
+        .push(ResolvedStart {
+            registration_id: bind.registration_id().clone(),
+            start: bind.resolved_start().clone(),
+        });
 }
 
 fn snapshot(resolved: &Mutex<Vec<ResolvedStart>>) -> Vec<ResolvedStart> {
@@ -92,13 +92,22 @@ fn snapshot(resolved: &Mutex<Vec<ResolvedStart>>) -> Vec<ResolvedStart> {
 fn starts_from_binds<B: BindHandle>(binds: &[B]) -> Vec<ResolvedStart> {
     binds
         .iter()
-        .filter_map(|bind| {
-            bind.resolved_start().map(|start| ResolvedStart {
-                registration_id: bind.registration_id().clone(),
-                start: start.clone(),
-            })
+        .map(|bind| ResolvedStart {
+            registration_id: bind.registration_id().clone(),
+            start: bind.resolved_start().clone(),
         })
         .collect()
+}
+
+fn required_binding_complete(set: &RegistrationSet, resolved: &[ResolvedStart]) -> bool {
+    set.registrations
+        .iter()
+        .filter(|registration| registration.required)
+        .all(|registration| {
+            resolved.iter().any(|start| {
+                start.registration_id.as_str() == registration.registration_id.as_str()
+            })
+        })
 }
 
 async fn run_loop<O, C>(
@@ -322,7 +331,19 @@ fn terminal_deadline(
     now: &Timestamp,
     resolved: &[ResolvedStart],
 ) -> Option<LiveWaitOutcome> {
-    if now >= &request.logical_deadline {
+    let at_logical = now >= &request.logical_deadline;
+    let at_run = now >= &request.run_deadline;
+    if !at_logical && !at_run {
+        return None;
+    }
+    if !required_binding_complete(set, resolved) {
+        return Some(outcome::failed(
+            request,
+            now.clone(),
+            "required_bind_pending",
+        ));
+    }
+    if at_logical {
         return Some(outcome::logical_deadman(
             set,
             request,
@@ -330,10 +351,7 @@ fn terminal_deadline(
             resolved,
         ));
     }
-    if now >= &request.run_deadline {
-        return Some(outcome::no_change(set, request, now.clone(), resolved));
-    }
-    None
+    Some(outcome::no_change(set, request, now.clone(), resolved))
 }
 
 fn earliest_deadline(request: &LiveWaitRequest) -> &Timestamp {
