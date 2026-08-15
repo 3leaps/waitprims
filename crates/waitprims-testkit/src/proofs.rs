@@ -73,11 +73,24 @@ async fn two_arms_first_accepted_events_loser_cleaned() {
         .expect("first-match");
     admit(&outcome);
     assert_eq!(outcome.outcome_kind, OutcomeKind::Events);
-    let events = outcome.events.expect("events");
+    let events = outcome.events.as_ref().expect("events");
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].registration_id.as_str(), "reg:sms-1");
     assert!(observer.cancelled_ids().contains("reg:chanvoy-1"));
     assert_eq!(observer.live_bind_count(), 0);
+    assert!(
+        outcome.arms.is_none(),
+        "first-match events must not invent loser arms"
+    );
+    assert!(
+        outcome.coverage_complete.is_none(),
+        "first-match events must not claim complete coverage"
+    );
+    let json = serde_json::to_string(&outcome).expect("serialize");
+    assert!(
+        !json.contains("anc:baseline-latest"),
+        "must not fabricate a policy cursor: {json}"
+    );
 }
 
 #[tokio::test]
@@ -277,6 +290,82 @@ async fn slow_arm_cannot_starve_cancel_or_ready_sibling() {
     }
     cancel.trigger();
     let outcome = task.await.expect("join").expect("cancel vs hang");
+    admit(&outcome);
+    assert_eq!(outcome.outcome_kind, OutcomeKind::Cancelled);
+    assert_eq!(observer.live_bind_count(), 0);
+}
+
+#[tokio::test]
+async fn empty_pending_observer_honors_run_deadline_as_no_change() {
+    let set = three_arm_set();
+    let request = live_wait_request();
+    let clock = FakeClock::auto(request.created_at.clone());
+    let observer = ScriptedObserver::new(Script::default(), clock.clone());
+    let outcome = run_first_match(&set, &request, &observer, &clock, &Cancel::new())
+        .await
+        .expect("no_change");
+    admit(&outcome);
+    assert_eq!(outcome.outcome_kind, OutcomeKind::NoChange);
+    assert_eq!(outcome.completed_at, ts("2026-08-15T16:20:00Z"));
+    assert_eq!(clock.current_time(), ts("2026-08-15T16:20:00Z"));
+    assert_eq!(
+        outcome
+            .logical_deadline
+            .as_ref()
+            .map(Timestamp::as_str)
+            .map(str::to_string),
+        Some("2026-08-15T17:00:00Z".to_string())
+    );
+    assert_eq!(observer.live_bind_count(), 0);
+}
+
+#[tokio::test]
+async fn slow_bind_cannot_starve_cancel_or_ready_sibling() {
+    let set = two_arm_set();
+    let request = live_wait_request();
+    let script = Script {
+        buffer_limit: 8,
+        events: vec![wait_event(
+            "reg:sms-1",
+            "sms_inbound",
+            "evt:sms-1",
+            "2026-08-15T16:05:00Z",
+        )],
+    };
+    let clock = FakeClock::auto(request.created_at.clone());
+    let observer = ScriptedObserver::new(script, clock.clone());
+    observer.hang_bind("reg:chanvoy-1");
+    let outcome = run_first_match(&set, &request, &observer, &clock, &Cancel::new())
+        .await
+        .expect("ready sibling despite hanging bind");
+    admit(&outcome);
+    assert_eq!(outcome.outcome_kind, OutcomeKind::Events);
+    assert_eq!(
+        outcome.events.as_ref().unwrap()[0].registration_id.as_str(),
+        "reg:sms-1"
+    );
+    assert!(outcome.arms.is_none());
+    assert!(outcome.coverage_complete.is_none());
+    assert_eq!(observer.live_bind_count(), 0);
+
+    let clock = FakeClock::manual(request.created_at.clone());
+    let observer = ScriptedObserver::new(Script::default(), clock.clone());
+    observer.hang_bind("reg:chanvoy-1");
+    observer.hang_bind("reg:sms-1");
+    let cancel = Cancel::new();
+    let set2 = set.clone();
+    let request2 = request.clone();
+    let clock2 = clock.clone();
+    let observer2 = observer.clone();
+    let cancel2 = cancel.clone();
+    let task = tokio::spawn(async move {
+        run_first_match(&set2, &request2, &observer2, &clock2, &cancel2).await
+    });
+    for _ in 0..8 {
+        tokio::task::yield_now().await;
+    }
+    cancel.trigger();
+    let outcome = task.await.expect("join").expect("cancel vs hanging bind");
     admit(&outcome);
     assert_eq!(outcome.outcome_kind, OutcomeKind::Cancelled);
     assert_eq!(observer.live_bind_count(), 0);

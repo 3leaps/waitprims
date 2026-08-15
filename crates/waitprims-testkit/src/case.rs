@@ -1,9 +1,9 @@
 //! Builders for sterile first-match cases.
 
 use waitprims_core::{
-    ActorRef, Anchor, AnchorKind, AuthnMode, BaselinePolicy, Canonicalization, CapabilityToken,
-    ContentDigest, DigestAlgorithm, IdToken, JcsDigest, LiveWaitRequest, OpaqueRef, PayloadRef,
-    PredicateRef, Registration, RegistrationSet, ReplayStatus, Timestamp, WaitBound, WaitEvent,
+    ActorRef, Anchor, AnchorKind, AuthnMode, Canonicalization, CapabilityToken, ContentDigest,
+    DigestAlgorithm, IdToken, JcsDigest, LiveWaitRequest, OpaqueRef, PayloadRef, PredicateRef,
+    Registration, RegistrationSet, ReplayStatus, Timestamp, WaitBound, WaitEvent,
 };
 
 /// Parse a fixture timestamp.
@@ -42,7 +42,7 @@ pub fn registration_set(registrations: Vec<Registration>) -> RegistrationSet {
     }
 }
 
-/// One required registration with `baseline_policy=latest`.
+/// One required registration with a declared exclusive start cursor.
 pub fn registration(registration_id: &str, method_id: &str, subject_id: &str) -> Registration {
     Registration {
         registration_id: IdToken::new(registration_id),
@@ -58,8 +58,11 @@ pub fn registration(registration_id: &str, method_id: &str, subject_id: &str) ->
             max_events: 50,
             max_bytes: 524_288,
         },
-        start_anchor: None,
-        baseline_policy: Some(BaselinePolicy::Latest),
+        start_anchor: Some(Anchor {
+            kind: AnchorKind::ProviderOpaque,
+            value: IdToken::new("anc:cursor-0"),
+        }),
+        baseline_policy: None,
     }
 }
 

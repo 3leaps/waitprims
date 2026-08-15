@@ -1,25 +1,9 @@
 //! Build admitted `live_wait_outcome` values from a first-match decision.
 
 use waitprims_core::{
-    Anchor, AnchorKind, ArmStatus, CoverageArm, IdToken, LiveWaitOutcome, LiveWaitRequest,
-    OutcomeKind, Registration, RegistrationSet, Timestamp, WaitEvent,
+    ArmStatus, CoverageArm, IdToken, LiveWaitOutcome, LiveWaitRequest, OutcomeKind, Registration,
+    RegistrationSet, Timestamp, WaitEvent,
 };
-
-pub(crate) fn start_anchor(registration: &Registration) -> Anchor {
-    if let Some(anchor) = &registration.start_anchor {
-        return anchor.clone();
-    }
-    let value = match registration.baseline_policy {
-        Some(waitprims_core::BaselinePolicy::Latest) => "anc:baseline-latest",
-        Some(waitprims_core::BaselinePolicy::Earliest) => "anc:baseline-earliest",
-        Some(waitprims_core::BaselinePolicy::ProviderDefined) => "anc:baseline-provider",
-        None => "anc:baseline",
-    };
-    Anchor {
-        kind: AnchorKind::ProviderOpaque,
-        value: IdToken::new(value),
-    }
-}
 
 fn arm_id(registration: &Registration) -> IdToken {
     IdToken::new(format!("arm:{}", registration.registration_id.as_str()))
@@ -29,23 +13,25 @@ fn coverage_arm(
     registration: &Registration,
     status: ArmStatus,
     event: Option<&WaitEvent>,
-) -> CoverageArm {
-    let start = start_anchor(registration);
+) -> Option<CoverageArm> {
+    let start = event
+        .map(|ev| ev.start_anchor.clone())
+        .or_else(|| registration.start_anchor.clone())?;
     let proposed = event
         .map(|ev| ev.proposed_next_anchor.clone())
         .unwrap_or_else(|| start.clone());
-    CoverageArm {
+    Some(CoverageArm {
         arm_id: arm_id(registration),
         registration_id: registration.registration_id.clone(),
         required: registration.required,
         status,
         degraded: false,
-        start_anchor: event.map(|ev| ev.start_anchor.clone()).unwrap_or(start),
+        start_anchor: start,
         proposed_next_anchor: proposed,
         event_count: u64::from(event.is_some()),
         byte_count: 0,
         reason_code: None,
-    }
+    })
 }
 
 fn base(request: &LiveWaitRequest, completed_at: Timestamp, kind: OutcomeKind) -> LiveWaitOutcome {
@@ -72,40 +58,22 @@ fn base(request: &LiveWaitRequest, completed_at: Timestamp, kind: OutcomeKind) -
     }
 }
 
-fn arms_for(
-    set: &RegistrationSet,
-    winner: Option<&WaitEvent>,
-    winner_status: ArmStatus,
-    loser_status: ArmStatus,
-) -> Vec<CoverageArm> {
+fn clean_arms(set: &RegistrationSet) -> Vec<CoverageArm> {
     set.registrations
         .iter()
-        .map(|reg| {
-            let is_winner = winner
-                .map(|ev| ev.registration_id.as_str() == reg.registration_id.as_str())
-                .unwrap_or(false);
-            if is_winner {
-                coverage_arm(reg, winner_status, winner)
-            } else {
-                coverage_arm(reg, loser_status, None)
-            }
-        })
+        .filter_map(|reg| coverage_arm(reg, ArmStatus::NoChange, None))
         .collect()
 }
 
 pub(crate) fn events(
-    set: &RegistrationSet,
     request: &LiveWaitRequest,
     completed_at: Timestamp,
     event: WaitEvent,
 ) -> LiveWaitOutcome {
     let proposed = event.proposed_next_anchor.clone();
-    let arms = arms_for(set, Some(&event), ArmStatus::Events, ArmStatus::NoChange);
     let mut outcome = base(request, completed_at, OutcomeKind::Events);
     outcome.events = Some(vec![event]);
     outcome.proposed_next_anchor = Some(proposed);
-    outcome.coverage_complete = Some(true);
-    outcome.arms = Some(arms);
     outcome
 }
 
@@ -116,7 +84,23 @@ pub(crate) fn partial(
     event: Option<WaitEvent>,
 ) -> LiveWaitOutcome {
     let proposed = event.as_ref().map(|ev| ev.proposed_next_anchor.clone());
-    let arms = arms_for(set, event.as_ref(), ArmStatus::Events, ArmStatus::Deferred);
+    let winner_id = event
+        .as_ref()
+        .map(|ev| ev.registration_id.as_str().to_string());
+    let arms: Vec<CoverageArm> = set
+        .registrations
+        .iter()
+        .filter_map(|reg| {
+            let is_winner = winner_id
+                .as_deref()
+                .is_some_and(|id| id == reg.registration_id.as_str());
+            if is_winner {
+                coverage_arm(reg, ArmStatus::Events, event.as_ref())
+            } else {
+                coverage_arm(reg, ArmStatus::Deferred, None)
+            }
+        })
+        .collect();
     let mut outcome = base(request, completed_at, OutcomeKind::Partial);
     outcome.events = Some(event.into_iter().collect());
     outcome.proposed_next_anchor = proposed;
@@ -130,12 +114,11 @@ pub(crate) fn logical_deadman(
     request: &LiveWaitRequest,
     completed_at: Timestamp,
 ) -> LiveWaitOutcome {
-    let arms = arms_for(set, None, ArmStatus::NoChange, ArmStatus::NoChange);
     let mut outcome = base(request, completed_at, OutcomeKind::LogicalDeadman);
     outcome.events = Some(Vec::new());
     outcome.logical_deadline = Some(request.logical_deadline.clone());
     outcome.coverage_complete = Some(true);
-    outcome.arms = Some(arms);
+    outcome.arms = Some(clean_arms(set));
     outcome
 }
 
@@ -144,12 +127,11 @@ pub(crate) fn no_change(
     request: &LiveWaitRequest,
     completed_at: Timestamp,
 ) -> LiveWaitOutcome {
-    let arms = arms_for(set, None, ArmStatus::NoChange, ArmStatus::NoChange);
     let mut outcome = base(request, completed_at, OutcomeKind::NoChange);
     outcome.events = Some(Vec::new());
     outcome.logical_deadline = Some(request.logical_deadline.clone());
     outcome.coverage_complete = Some(true);
-    outcome.arms = Some(arms);
+    outcome.arms = Some(clean_arms(set));
     outcome
 }
 

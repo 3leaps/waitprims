@@ -283,6 +283,49 @@ fn wait_scripted_first_match_exits_zero_with_live_wait_outcome() {
     assert_eq!(value["outcome_kind"], "events");
     assert_eq!(value["events"][0]["registration_id"], "reg:sms-1");
     assert_eq!(value["events"][0]["method_id"], "sms_inbound");
+    assert!(
+        value.get("arms").is_none(),
+        "events must omit unearned arms: {stdout}"
+    );
+    assert!(
+        value.get("coverage_complete").is_none(),
+        "events must omit unearned coverage_complete: {stdout}"
+    );
+    assert!(
+        !stdout.contains("anc:baseline-latest"),
+        "must not fabricate a policy cursor: {stdout}"
+    );
+}
+
+#[test]
+fn wait_empty_script_is_no_change_at_run_deadline() {
+    let root = fixture_root();
+    let output = bin()
+        .args([
+            "wait",
+            "--registration-set",
+            root.join("registration_set.json").to_str().unwrap(),
+            "--request",
+            root.join("live_wait_request.json").to_str().unwrap(),
+            "--script",
+            root.join("empty.json").to_str().unwrap(),
+        ])
+        .output()
+        .expect("run wait empty script");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let value: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("stdout must be JSON");
+    assert_eq!(value["message_type"], "live_wait_outcome");
+    assert_eq!(value["outcome_kind"], "no_change");
+    assert_eq!(value["completed_at"], "2026-08-15T16:20:00Z");
+    assert_eq!(value["logical_deadline"], "2026-08-15T17:00:00Z");
 }
 
 #[test]

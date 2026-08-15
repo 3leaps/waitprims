@@ -22,6 +22,7 @@ pub struct ScriptedObserver {
     queues: Arc<Queues>,
     clock: FakeClock,
     tracker: BindTracker,
+    hang_binds: Arc<Mutex<BTreeSet<String>>>,
 }
 
 impl ScriptedObserver {
@@ -51,7 +52,16 @@ impl ScriptedObserver {
             }),
             clock,
             tracker: BindTracker::new(),
+            hang_binds: Arc::new(Mutex::new(BTreeSet::new())),
         }
+    }
+
+    /// Leave `bind()` pending forever for this registration.
+    pub fn hang_bind(&self, registration_id: &str) {
+        self.hang_binds
+            .lock()
+            .expect("observer")
+            .insert(registration_id.to_string());
     }
 
     /// Binds that have not been released.
@@ -111,6 +121,14 @@ impl Observer for ScriptedObserver {
     type Bind = TrackedBind;
 
     async fn bind(&self, registration: &Registration) -> Result<Self::Bind> {
+        if self
+            .hang_binds
+            .lock()
+            .expect("observer")
+            .contains(registration.registration_id.as_str())
+        {
+            std::future::pending::<()>().await;
+        }
         self.tracker.acquire(registration.registration_id.as_str());
         Ok(TrackedBind::new(
             registration.registration_id.clone(),

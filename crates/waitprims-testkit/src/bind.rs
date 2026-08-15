@@ -86,6 +86,6 @@ impl TrackedBind {
 
 impl Drop for BindInner {
     fn drop(&mut self) {
-        self.tracker.release(&self.registration_id);
+        self.tracker.cancel(&self.registration_id);
     }
 }

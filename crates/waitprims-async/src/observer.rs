@@ -27,7 +27,7 @@ pub enum Observation {
 /// Shape is not frozen; bind / next / cancel is the required seam.
 pub trait Observer: Send + Sync {
     /// Handle returned by [`Self::bind`]. Dropping it must release the bind.
-    type Bind: Send + Sync;
+    type Bind: Send + Sync + Unpin;
 
     /// Bind one registration. Failure prevents a valid outcome.
     fn bind(&self, registration: &Registration) -> impl Future<Output = Result<Self::Bind>> + Send;

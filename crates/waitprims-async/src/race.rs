@@ -7,36 +7,39 @@ use std::task::{Context, Poll};
 use crate::observer::Observation;
 use waitprims_core::Result;
 
-enum Arm<F> {
+enum Arm<F, T> {
     Pending(Pin<Box<F>>),
-    Ready(Observation),
+    Ready(Option<T>),
 }
 
-/// Wait until at least one arm yields a terminal observation, or every arm
-/// yields [`Observation::Idle`].
-pub(crate) struct ObservationRace<F> {
-    arms: Vec<Arm<F>>,
+/// Wait until at least one arm yields a terminal value, or every arm is ready
+/// with a non-terminal value (all idle).
+pub(crate) struct FirstReady<F, T> {
+    arms: Vec<Arm<F, T>>,
+    is_terminal: fn(&T) -> bool,
 }
 
-impl<F> ObservationRace<F>
+impl<F, T> FirstReady<F, T>
 where
-    F: Future<Output = Result<Observation>>,
+    F: Future<Output = Result<T>>,
 {
-    pub(crate) fn new(futures: impl IntoIterator<Item = F>) -> Self {
+    pub(crate) fn new(futures: impl IntoIterator<Item = F>, is_terminal: fn(&T) -> bool) -> Self {
         Self {
             arms: futures
                 .into_iter()
                 .map(|fut| Arm::Pending(Box::pin(fut)))
                 .collect(),
+            is_terminal,
         }
     }
 }
 
-impl<F> Future for ObservationRace<F>
+impl<F, T> Future for FirstReady<F, T>
 where
-    F: Future<Output = Result<Observation>>,
+    F: Future<Output = Result<T>>,
+    T: Unpin,
 {
-    type Output = Result<Vec<(usize, Observation)>>;
+    type Output = Result<Vec<(usize, T)>>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
@@ -46,29 +49,33 @@ where
         for arm in &mut this.arms {
             if let Arm::Pending(fut) = arm {
                 match fut.as_mut().poll(cx) {
-                    Poll::Ready(Ok(obs)) => {
-                        if !matches!(obs, Observation::Idle) {
+                    Poll::Ready(Ok(value)) => {
+                        if (this.is_terminal)(&value) {
                             terminal = true;
                         }
-                        *arm = Arm::Ready(obs);
+                        *arm = Arm::Ready(Some(value));
                     }
                     Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
                     Poll::Pending => pending = true,
                 }
-            } else if let Arm::Ready(obs) = arm {
-                if !matches!(obs, Observation::Idle) {
+            } else if let Arm::Ready(Some(value)) = arm {
+                if (this.is_terminal)(value) {
                     terminal = true;
                 }
             }
         }
 
-        if terminal {
+        if terminal || !pending {
             let mut out = Vec::new();
             for (idx, arm) in this.arms.iter_mut().enumerate() {
                 match arm {
-                    Arm::Ready(obs) => out.push((idx, obs.clone())),
+                    Arm::Ready(slot) => {
+                        if let Some(value) = slot.take() {
+                            out.push((idx, value));
+                        }
+                    }
                     Arm::Pending(fut) => match fut.as_mut().poll(cx) {
-                        Poll::Ready(Ok(obs)) => out.push((idx, obs)),
+                        Poll::Ready(Ok(value)) => out.push((idx, value)),
                         Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
                         Poll::Pending => {}
                     },
@@ -77,19 +84,14 @@ where
             return Poll::Ready(Ok(out));
         }
 
-        if !pending {
-            let out = this
-                .arms
-                .iter()
-                .enumerate()
-                .filter_map(|(idx, arm)| match arm {
-                    Arm::Ready(obs) => Some((idx, obs.clone())),
-                    Arm::Pending(_) => None,
-                })
-                .collect();
-            return Poll::Ready(Ok(out));
-        }
-
         Poll::Pending
     }
+}
+
+pub(crate) fn observation_is_terminal(obs: &Observation) -> bool {
+    !matches!(obs, Observation::Idle)
+}
+
+pub(crate) fn bound_observation_is_terminal<B>(value: &(B, Observation)) -> bool {
+    observation_is_terminal(&value.1)
 }
