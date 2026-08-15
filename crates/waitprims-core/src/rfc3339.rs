@@ -59,6 +59,59 @@ impl Timestamp {
             Ordering::Greater => 1,
         }
     }
+
+    /// Add `duration`, saturating at this instant if the sum is unrepresentable.
+    pub fn saturating_add(&self, duration: std::time::Duration) -> Self {
+        let extra = time::Duration::new(duration.as_secs() as i64, duration.subsec_nanos() as i32);
+        match self.instant.checked_add(extra) {
+            Some(instant) => Self {
+                raw: format_utc(instant),
+                instant,
+            },
+            None => self.clone(),
+        }
+    }
+
+    /// Elapsed time from this instant until `later`, or zero if `later` is not after.
+    pub fn duration_until(&self, later: &Self) -> std::time::Duration {
+        if later.instant <= self.instant {
+            return std::time::Duration::ZERO;
+        }
+        let delta = later.instant - self.instant;
+        let secs = delta.whole_seconds().max(0) as u64;
+        let nanos = delta.subsec_nanoseconds();
+        let nanos = if nanos < 0 { 0 } else { nanos as u32 };
+        std::time::Duration::new(secs, nanos)
+    }
+}
+
+fn format_utc(instant: OffsetDateTime) -> String {
+    let utc = instant.to_offset(UtcOffset::UTC);
+    let date = utc.date();
+    let t = utc.time();
+    let ns = t.nanosecond();
+    if ns == 0 {
+        format!(
+            "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+            date.year(),
+            u8::from(date.month()),
+            date.day(),
+            t.hour(),
+            t.minute(),
+            t.second()
+        )
+    } else {
+        format!(
+            "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:06}Z",
+            date.year(),
+            u8::from(date.month()),
+            date.day(),
+            t.hour(),
+            t.minute(),
+            t.second(),
+            ns / 1000
+        )
+    }
 }
 
 impl PartialEq for Timestamp {
@@ -364,5 +417,17 @@ mod tests {
             compare("2026-08-15T17:00:00.100Z", "2026-08-15T17:00:00Z").unwrap(),
             1
         );
+    }
+
+    #[test]
+    fn saturating_add_and_duration_until_round_trip() {
+        let start = Timestamp::parse("2026-08-15T16:00:00Z").unwrap();
+        let later = start.saturating_add(std::time::Duration::from_secs(90));
+        assert_eq!(later.as_str(), "2026-08-15T16:01:30Z");
+        assert_eq!(
+            start.duration_until(&later),
+            std::time::Duration::from_secs(90)
+        );
+        assert_eq!(later.duration_until(&start), std::time::Duration::ZERO);
     }
 }

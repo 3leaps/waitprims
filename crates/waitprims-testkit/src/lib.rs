@@ -3,10 +3,18 @@
 //! Fake clocks and scripted observers live here. This crate does not
 //! perform network I/O.
 
-pub use waitprims_async::{Error, Result};
+mod bind;
+mod case;
+mod clock;
+mod observer;
+mod script;
+
+pub use bind::{BindTracker, TrackedBind};
+pub use case::{live_wait_request, registration, registration_set, ts, wait_event};
+pub use clock::FakeClock;
+pub use observer::{IdleObserver, ScriptedObserver};
+pub use script::Script;
+pub use waitprims_async::{Cancel, Clock, Error, Observation, Observer, Result, TIE_RULE};
 
 #[cfg(test)]
-mod tests {
-    #[tokio::test]
-    async fn crate_compiles() {}
-}
+mod proofs;

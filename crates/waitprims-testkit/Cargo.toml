@@ -12,3 +12,5 @@ description = "Deterministic test helpers for waitprims"
 waitprims-core.workspace = true
 waitprims-async.workspace = true
 tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
