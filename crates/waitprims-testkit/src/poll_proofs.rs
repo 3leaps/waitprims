@@ -783,6 +783,214 @@ async fn pending_baseline_bind_does_not_invent_anchor() {
 }
 
 #[tokio::test]
+async fn per_registration_event_bound_is_partial_not_complete() {
+    let mut reg = registration("reg:sms-1", "sms_inbound", "sms:inbox-1");
+    reg.bounds.max_events = 1;
+    let set = registration_set(vec![reg]);
+    let request = poll_cycle_request(&set);
+    assert!(
+        request.bound.is_none(),
+        "proof must not lean on a request-level event cap"
+    );
+    assert_eq!(set.registrations.len(), 1);
+    let clock = FakeClock::auto(request.created_at.clone());
+    let observer = EndlessReadyObserver::new();
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        run_poll_cycle(&set, &request, &observer, &clock, &Cancel::new()),
+    )
+    .await
+    .expect("per-registration event bound must stop drain")
+    .expect("poll cycle");
+    admit(&outcome);
+    assert_eq!(outcome.events.len(), 1);
+    assert_eq!(outcome.outcome_kind, OutcomeKind::Partial);
+    assert!(!outcome.coverage_complete);
+    assert_eq!(outcome.arms.len(), 1);
+    assert_eq!(outcome.arms[0].status, ArmStatus::Events);
+    assert_eq!(outcome.arms[0].event_count, 1);
+    assert_eq!(
+        outcome.arms[0].reason_code.as_ref().map(IdToken::as_str),
+        Some("bound_exhausted")
+    );
+    assert_eq!(observer.live_bind_count(), 0);
+
+    let mut replay_reg = registration("reg:sms-1", "sms_inbound", "sms:inbox-1");
+    replay_reg.bounds.max_events = 1;
+    let replay_set = registration_set(vec![replay_reg]);
+    let replay_req = poll_cycle_request(&replay_set);
+    let script = Script {
+        buffer_limit: 8,
+        events: vec![
+            wait_event(
+                "reg:sms-1",
+                "sms_inbound",
+                "evt:sms-1",
+                "2026-08-15T16:05:00Z",
+            ),
+            wait_event(
+                "reg:sms-1",
+                "sms_inbound",
+                "evt:sms-2",
+                "2026-08-15T16:05:00Z",
+            ),
+        ],
+    };
+    let clock = FakeClock::auto(replay_req.created_at.clone());
+    let observer = ScriptedObserver::new(script, clock.clone());
+    let first = run_cycle(&replay_set, &replay_req, &observer, &clock).await;
+    assert_eq!(first.outcome_kind, OutcomeKind::Partial);
+    assert_eq!(first.events.len(), 1);
+    assert_eq!(first.events[0].event_id.as_str(), "evt:sms-1");
+    let mut second_req = replay_req.clone();
+    second_req.message_id = IdToken::new("msg:aw-poll-req-2");
+    let clock = FakeClock::auto(second_req.created_at.clone());
+    let second = run_cycle(&replay_set, &second_req, &observer, &clock).await;
+    assert_eq!(
+        second
+            .events
+            .iter()
+            .map(|e| e.event_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["evt:sms-2"],
+        "unreported item must remain for replay, not be silently dropped: {:?}",
+        second.events
+    );
+}
+
+#[tokio::test]
+async fn per_registration_byte_bound_is_partial_not_complete() {
+    let sample = wait_event(
+        "reg:sms-1",
+        "sms_inbound",
+        "evt:sample",
+        "2026-08-15T16:01:00Z",
+    );
+    let surface = event_surface_bytes(&sample);
+    let mut reg = registration("reg:sms-1", "sms_inbound", "sms:inbox-1");
+    reg.bounds.max_bytes = surface;
+    let set = registration_set(vec![reg]);
+    let request = poll_cycle_request(&set);
+    assert!(
+        request.bound.is_none(),
+        "proof must not lean on a request-level byte cap"
+    );
+    assert_eq!(set.registrations.len(), 1);
+    let clock = FakeClock::auto(request.created_at.clone());
+    let observer = EndlessReadyObserver::new();
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        run_poll_cycle(&set, &request, &observer, &clock, &Cancel::new()),
+    )
+    .await
+    .expect("per-registration byte bound must stop drain")
+    .expect("poll cycle");
+    admit(&outcome);
+    assert_eq!(outcome.events.len(), 1);
+    assert_eq!(outcome.outcome_kind, OutcomeKind::Partial);
+    assert!(!outcome.coverage_complete);
+    assert_eq!(outcome.arms.len(), 1);
+    assert_eq!(outcome.arms[0].status, ArmStatus::Events);
+    assert_eq!(outcome.arms[0].byte_count, surface);
+    assert_eq!(
+        outcome.arms[0].reason_code.as_ref().map(IdToken::as_str),
+        Some("bound_exhausted")
+    );
+    assert_eq!(observer.live_bind_count(), 0);
+}
+
+#[tokio::test]
+async fn pre_bind_cancel_keeps_explicit_start() {
+    let set = three_arm_set();
+    let request = poll_cycle_request(&set);
+    let clock = FakeClock::auto(request.created_at.clone());
+    let observer = ScriptedObserver::new(Script::default(), clock.clone());
+    let cancel = Cancel::new();
+    cancel.trigger();
+    let outcome = run_poll_cycle(&set, &request, &observer, &clock, &cancel)
+        .await
+        .expect("pre-bind cancel must admit cancelled, not unresolved_start");
+    admit(&outcome);
+    assert_eq!(outcome.outcome_kind, OutcomeKind::Cancelled);
+    assert_eq!(
+        outcome.reason_code.as_ref().map(IdToken::as_str),
+        Some("consumer_cancelled")
+    );
+    assert_eq!(outcome.arms.len(), 3);
+    for arm in &outcome.arms {
+        assert_eq!(arm.start_anchor.value.as_str(), "anc:cursor-0");
+        assert!(!arm.start_anchor.value.as_str().starts_with("anc:h-"));
+    }
+    let json = serde_json::to_string(&outcome).expect("serialize");
+    assert!(!json.contains("anc:h-"), "must not mint anc:h-…: {json}");
+    assert_eq!(observer.live_bind_count(), 0);
+    assert!(observer.bind_requested_starts().is_empty());
+}
+
+#[tokio::test]
+async fn entry_deadline_keeps_explicit_and_acked_starts() {
+    let set = three_arm_set();
+    let mut request = poll_cycle_request(&set);
+    request.run_deadline = request.created_at.clone();
+    let clock = FakeClock::auto(request.created_at.clone());
+    let observer = ScriptedObserver::new(Script::default(), clock.clone());
+    let outcome = run_poll_cycle(&set, &request, &observer, &clock, &Cancel::new())
+        .await
+        .expect("entry deadline must admit failed, not unresolved_start");
+    admit(&outcome);
+    assert_eq!(outcome.outcome_kind, OutcomeKind::Failed);
+    assert_eq!(
+        outcome.reason_code.as_ref().map(IdToken::as_str),
+        Some("required_bind_pending")
+    );
+    assert!(!outcome.coverage_complete);
+    assert_eq!(outcome.arms.len(), 3);
+    for arm in &outcome.arms {
+        assert_eq!(arm.start_anchor.value.as_str(), "anc:cursor-0");
+    }
+    assert!(observer.bind_requested_starts().is_empty());
+
+    let acked = Anchor {
+        kind: AnchorKind::ProviderOpaque,
+        value: IdToken::new("anc:acked-1"),
+    };
+    let mut acked_req = request.clone();
+    acked_req.message_id = IdToken::new("msg:aw-poll-req-acked");
+    acked_req
+        .acknowledged_anchors
+        .insert("reg:sms-1".to_string(), acked.clone());
+    let clock = FakeClock::auto(acked_req.created_at.clone());
+    let observer = ScriptedObserver::new(Script::default(), clock.clone());
+    let acked_out = run_poll_cycle(&set, &acked_req, &observer, &clock, &Cancel::new())
+        .await
+        .expect("acked explicit start is contract evidence");
+    admit(&acked_out);
+    assert_eq!(acked_out.outcome_kind, OutcomeKind::Failed);
+    assert_eq!(
+        acked_out.reason_code.as_ref().map(IdToken::as_str),
+        Some("required_bind_pending")
+    );
+    assert_eq!(
+        acked_out
+            .arms
+            .iter()
+            .find(|arm| arm.registration_id.as_str() == "reg:sms-1")
+            .map(|arm| &arm.start_anchor),
+        Some(&acked)
+    );
+    assert_eq!(
+        acked_out
+            .arms
+            .iter()
+            .find(|arm| arm.registration_id.as_str() == "reg:chanvoy-1")
+            .map(|arm| arm.start_anchor.value.as_str()),
+        Some("anc:cursor-0")
+    );
+    let json = serde_json::to_string(&acked_out).expect("serialize");
+    assert!(!json.contains("anc:h-"), "must not mint anc:h-…: {json}");
+}
+
+#[tokio::test]
 async fn collection_stops_at_payload_ref_and_byte_bounds() {
     let set = two_arm_set();
     let sample = wait_event(

@@ -81,4 +81,11 @@ pub trait Observer: Send + Sync {
     fn poll_ready(&self, _bind: &Self::Bind) -> Option<Observation> {
         None
     }
+
+    /// Put a [`Self::poll_ready`] observation back so it can replay.
+    ///
+    /// Called when collection inspects an item it cannot accept under the
+    /// remaining bound. Default: drop. Observers that dequeue in
+    /// [`Self::poll_ready`] should restore the item.
+    fn restore_ready(&self, _bind: &Self::Bind, _obs: Observation) {}
 }

@@ -272,6 +272,18 @@ impl Observer for ScriptedObserver {
     fn poll_ready(&self, bind: &Self::Bind) -> Option<Observation> {
         self.take_due(bind.registration_id.as_str())
     }
+
+    fn restore_ready(&self, bind: &Self::Bind, obs: Observation) {
+        if let Observation::Event(event) = obs {
+            self.queues
+                .events
+                .lock()
+                .expect("observer")
+                .entry(bind.registration_id.as_str().to_string())
+                .or_default()
+                .push_front(*event);
+        }
+    }
 }
 
 /// Observer that always returns [`Observation::Idle`].

@@ -25,6 +25,7 @@ use crate::race::{observation_is_terminal, FirstReady};
 #[derive(Debug, Clone)]
 enum ArmVisit {
     Events(Vec<WaitEvent>),
+    Saturated(Vec<WaitEvent>),
     Idle,
     Overflow,
     Failed(String),
@@ -117,23 +118,45 @@ impl CollectBudget {
             && self.bytes < self.max_bytes
     }
 
-    fn exhausted(&self) -> bool {
-        !self.room_for_another_event() || self.bytes >= self.max_bytes
-    }
-
-    fn try_take(&mut self, event: &WaitEvent) -> bool {
+    fn room_for_registration(&self, registration_id: &str) -> bool {
         if !self.room_for_another_event() {
             return false;
         }
+        let reg_events = self
+            .per_reg_events
+            .get(registration_id)
+            .copied()
+            .unwrap_or(0);
+        let reg_bytes = self
+            .per_reg_bytes
+            .get(registration_id)
+            .copied()
+            .unwrap_or(0);
+        let max_e = self
+            .reg_max_events
+            .get(registration_id)
+            .copied()
+            .unwrap_or(u64::MAX);
+        let max_b = self
+            .reg_max_bytes
+            .get(registration_id)
+            .copied()
+            .unwrap_or(u64::MAX);
+        reg_events < max_e && reg_bytes < max_b
+    }
+
+    fn exhausted(&self) -> bool {
+        !self.room_for_another_event()
+    }
+
+    fn try_take(&mut self, event: &WaitEvent) -> bool {
         let rid = event.registration_id.as_str();
-        let weight = event_surface_bytes(event);
-        let reg_events = self.per_reg_events.get(rid).copied().unwrap_or(0);
-        let reg_bytes = self.per_reg_bytes.get(rid).copied().unwrap_or(0);
-        let max_e = self.reg_max_events.get(rid).copied().unwrap_or(u64::MAX);
-        let max_b = self.reg_max_bytes.get(rid).copied().unwrap_or(u64::MAX);
-        if reg_events >= max_e {
+        if !self.room_for_registration(rid) {
             return false;
         }
+        let weight = event_surface_bytes(event);
+        let reg_bytes = self.per_reg_bytes.get(rid).copied().unwrap_or(0);
+        let max_b = self.reg_max_bytes.get(rid).copied().unwrap_or(u64::MAX);
         if self.bytes.saturating_add(weight) > self.max_bytes {
             return false;
         }
@@ -563,10 +586,14 @@ fn visit_from<O: Observer>(
                 return ArmVisit::Deferred;
             }
             let mut events = vec![stamped];
-            if let Some(bind) = bind {
-                drain_ready(observer, bind, request, budget, &mut events);
+            let truncated = bind
+                .map(|bind| drain_ready(observer, bind, request, budget, &mut events))
+                .unwrap_or(false);
+            if truncated {
+                ArmVisit::Saturated(events)
+            } else {
+                ArmVisit::Events(events)
             }
-            ArmVisit::Events(events)
         }
         Observation::Idle => ArmVisit::Idle,
         Observation::Overflow => ArmVisit::Overflow,
@@ -587,21 +614,33 @@ fn drain_ready<O: Observer>(
     request: &PollCycleRequest,
     budget: &mut CollectBudget,
     events: &mut Vec<WaitEvent>,
-) {
-    while !budget.exhausted() {
+) -> bool {
+    let rid = bind.registration_id().as_str();
+    if !budget.room_for_registration(rid) {
+        return true;
+    }
+    loop {
+        if !budget.room_for_registration(rid) {
+            return true;
+        }
         let Some(obs) = observer.poll_ready(bind) else {
-            return;
+            return false;
         };
         match obs {
             Observation::Event(event) => {
-                let stamped = stamp_activation(*event, request);
+                let original = *event;
+                let stamped = stamp_activation(original.clone(), request);
                 if !budget.try_take(&stamped) {
-                    return;
+                    observer.restore_ready(bind, Observation::Event(Box::new(original)));
+                    return true;
                 }
                 events.push(stamped);
             }
-            Observation::Overflow => return,
-            _ => return,
+            Observation::Overflow => return true,
+            other => {
+                observer.restore_ready(bind, other);
+                return false;
+            }
         }
     }
 }
@@ -643,9 +682,12 @@ fn decide_at_deadline(
         );
     }
     let mut visits = visits.clone();
-    let saw_events = visits
-        .values()
-        .any(|visit| matches!(visit, ArmVisit::Events(events) if !events.is_empty()));
+    let saw_events = visits.values().any(|visit| {
+        matches!(
+            visit,
+            ArmVisit::Events(events) | ArmVisit::Saturated(events) if !events.is_empty()
+        )
+    });
     for idx in fairness_order(set, request) {
         visits.entry(idx).or_insert_with(|| {
             if saw_events {
@@ -701,6 +743,7 @@ fn decide_kind(
 ) -> Result<PollCycleOutcome> {
     let mut events = Vec::new();
     let mut overflow = false;
+    let mut truncated = false;
     let mut failed = None;
     let mut dirty = false;
     let mut deferred_required = false;
@@ -708,6 +751,10 @@ fn decide_kind(
         let registration = &set.registrations[idx];
         match visits.get(&idx) {
             Some(ArmVisit::Events(found)) => events.extend(found.iter().cloned()),
+            Some(ArmVisit::Saturated(found)) => {
+                events.extend(found.iter().cloned());
+                truncated = true;
+            }
             Some(ArmVisit::Overflow) => overflow = true,
             Some(ArmVisit::Failed(reason)) => failed = Some(reason.clone()),
             Some(ArmVisit::Outage(_))
@@ -784,12 +831,23 @@ fn decide_kind(
         );
     }
     if !events.is_empty() {
-        let kind = if deferred_required {
+        let kind = if deferred_required || truncated {
             OutcomeKind::Partial
         } else {
             OutcomeKind::Events
         };
         return build(set, request, now, resolved, visits, kind, None);
+    }
+    if truncated {
+        return build(
+            set,
+            request,
+            now,
+            resolved,
+            visits,
+            OutcomeKind::Partial,
+            None,
+        );
     }
     if deferred_required && !at_logical {
         return build(
@@ -905,7 +963,7 @@ fn build(
     for idx in 0..set.registrations.len() {
         let registration = &set.registrations[idx];
         let arm_id = arm_id_for(request, registration, &mut required_index);
-        let Some(start) = honest_start(resolved, registration) else {
+        let Some(start) = honest_start(resolved, request, registration) else {
             continue;
         };
         let visit = visits.get(&idx);
@@ -1024,6 +1082,12 @@ fn build(
 fn visit_status(visit: Option<&ArmVisit>) -> (ArmStatus, bool, Option<String>, Vec<WaitEvent>) {
     match visit {
         Some(ArmVisit::Events(events)) => (ArmStatus::Events, false, None, events.clone()),
+        Some(ArmVisit::Saturated(events)) => (
+            ArmStatus::Events,
+            false,
+            Some("bound_exhausted".to_string()),
+            events.clone(),
+        ),
         Some(ArmVisit::Idle) => (ArmStatus::NoChange, false, None, Vec::new()),
         Some(ArmVisit::Overflow) => (
             ArmStatus::Observed,
@@ -1075,11 +1139,24 @@ fn coverage_is_complete(
     })
 }
 
-fn honest_start(resolved: &[ResolvedStart], registration: &Registration) -> Option<Anchor> {
-    resolved
+fn honest_start(
+    resolved: &[ResolvedStart],
+    request: &PollCycleRequest,
+    registration: &Registration,
+) -> Option<Anchor> {
+    if let Some(start) = resolved
         .iter()
         .find(|item| item.registration_id.as_str() == registration.registration_id.as_str())
-        .map(|item| item.start.clone())
+    {
+        return Some(start.start.clone());
+    }
+    if let Some(ack) = request
+        .acknowledged_anchors
+        .get(registration.registration_id.as_str())
+    {
+        return Some(ack.clone());
+    }
+    registration.start_anchor.clone()
 }
 
 fn arm_id_for(
