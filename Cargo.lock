@@ -1150,9 +1150,12 @@ version = "0.1.0-dev"
 dependencies = [
  "clap",
  "serde_json",
+ "tokio",
  "tracing",
  "tracing-subscriber",
+ "waitprims-async",
  "waitprims-core",
+ "waitprims-testkit",
 ]
 
 [[package]]
@@ -1172,6 +1175,8 @@ dependencies = [
 name = "waitprims-testkit"
 version = "0.1.0-dev"
 dependencies = [
+ "serde",
+ "serde_json",
  "tokio",
  "waitprims-async",
  "waitprims-core",

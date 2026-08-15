@@ -22,5 +22,10 @@ pub use digest::registration_digest;
 pub use error::{Error, NormativeReason, Result, ValidationError};
 pub use refs::{ActorRef, CapabilityToken, IdToken, OpaqueRef, PredicateRef};
 pub use rfc3339::Timestamp;
-pub use types::{AgentWaitMessage, MessageType};
+pub use types::{
+    AgentWaitMessage, Anchor, AnchorKind, ArmStatus, AuthnMode, BaselinePolicy, Canonicalization,
+    ContentDigest, CoverageArm, DigestAlgorithm, JcsDigest, LiveWaitOutcome, LiveWaitRequest,
+    MessageType, OutcomeKind, PayloadRef, PollBound, PollCycleAck, PollCycleOutcome,
+    PollCycleRequest, Registration, RegistrationSet, ReplayStatus, WaitBound, WaitEvent,
+};
 pub use validate::{validate_message, validate_raw_documents, AdmittedMessage};

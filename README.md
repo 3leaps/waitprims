@@ -5,7 +5,7 @@
 
 **Reliable event wait without a daemon.**
 
-waitprims is a library-first wait primitive for agent seats and services. It will provide typed observe, wait, deliver, and activate — first-match fan-in when you can block, one bounded poll-cycle when you cannot — and keep those receipts distinct. Provider clients, daemons, and durable timers stay out of this crate.
+waitprims is a library-first wait primitive for agent seats and services. It provides scripted first-match wait and will provide typed observe, deliver, and activate — first-match fan-in when you can block, one bounded poll-cycle when you cannot — and keep those receipts distinct. Provider clients, daemons, and durable timers stay out of this crate.
 
 The problem it retires: every adapter reinventing anchors, deadlines, cancellation, and “we posted, so the agent woke.”
 
@@ -69,9 +69,10 @@ The diagnostic binary lands at `target/debug/waitprims`.
 waitprims --help
 waitprims --version
 waitprims validate --input <file-or-directory>
+waitprims wait --registration-set <file> --request <file> --script <file>
 ```
 
-`validate --input` admits one message file or a directory set. JSON goes to stdout. Logs and errors go to stderr.
+`validate --input` admits one message file or a directory set. `wait` resolves a cited registration set and first-matches a scripted observer. JSON goes to stdout. Logs and errors go to stderr. `poll` is not implemented yet.
 
 ## License
 
