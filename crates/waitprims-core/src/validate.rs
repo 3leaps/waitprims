@@ -1,9 +1,15 @@
 //! Structural, normative, and set validation for `contract: agent-wait/v0`.
 //!
+//! [`validate_message`] and [`validate_raw_documents`] are the **only
+//! contract-admission path**. Public [`serde::Deserialize`] on
+//! [`AgentWaitMessage`] can bypass schema and normative checks; callers
+//! must not treat `serde_json::from_str` as admission.
+//!
 //! Schema validation uses the pin's relative entry schema. Cross-message
 //! rules are enforced in Rust.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::Deref;
 use std::sync::OnceLock;
 
 use jsonschema::Validator;
@@ -38,11 +44,48 @@ fn compiled_entry_schema() -> Result<&'static Validator> {
     }
 }
 
+/// An `agent-wait/v0` message that passed contract admission.
+///
+/// Construct only through [`validate_message`] or [`validate_raw_documents`].
+/// [`serde_json::from_str`] on [`AgentWaitMessage`] is not admission.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdmittedMessage(AgentWaitMessage);
+
+impl AdmittedMessage {
+    /// The admitted message.
+    pub fn into_inner(self) -> AgentWaitMessage {
+        self.0
+    }
+}
+
+impl Deref for AdmittedMessage {
+    type Target = AgentWaitMessage;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl AsRef<AgentWaitMessage> for AdmittedMessage {
+    fn as_ref(&self) -> &AgentWaitMessage {
+        &self.0
+    }
+}
+
 /// Validate one JSON document as an `agent-wait/v0` message.
+///
+/// This function and [`validate_raw_documents`] are the **only
+/// contract-admission path**. Public [`serde::Deserialize`] on
+/// [`AgentWaitMessage`] can bypass schema and normative checks. Callers
+/// must not treat `serde_json::from_str` as admission.
+///
+/// File validation handles one message. Use [`validate_raw_documents`]
+/// when checking a directory or other multi-document set (revision freeze,
+/// fairness, ack/retention).
 ///
 /// Entry is raw JSON so JCS uniqueness is checked before any typed value
 /// path can collapse duplicate keys.
-pub fn validate_message(raw: &str) -> Result<AgentWaitMessage> {
+pub fn validate_message(raw: &str) -> Result<AdmittedMessage> {
     let messages = validate_raw_documents(std::iter::once(raw))?;
     messages
         .into_iter()
@@ -51,7 +94,16 @@ pub fn validate_message(raw: &str) -> Result<AgentWaitMessage> {
 }
 
 /// Validate one or more raw JSON documents. Set rules run across the slice.
-pub fn validate_raw_documents<I, S>(raws: I) -> Result<Vec<AgentWaitMessage>>
+///
+/// This function and [`validate_message`] are the **only contract-admission
+/// path**. Public [`serde::Deserialize`] on [`AgentWaitMessage`] can bypass
+/// schema and normative checks. Callers must not treat `serde_json::from_str`
+/// as admission.
+///
+/// A single document is checked alone. Two or more documents are also
+/// checked as a set: revision freeze, fairness across outcomes, and
+/// ack/retention. Independent goldens are not one registration set.
+pub fn validate_raw_documents<I, S>(raws: I) -> Result<Vec<AdmittedMessage>>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
@@ -65,7 +117,7 @@ where
 
 /// Validate one or more already-unique documents. Callers must have parsed
 /// with [`crate::jcs::parse_strict`].
-fn validate_documents(documents: &[Value]) -> Result<Vec<AgentWaitMessage>> {
+fn validate_documents(documents: &[Value]) -> Result<Vec<AdmittedMessage>> {
     if documents.is_empty() {
         return Err(ValidationError::new("/", "empty_target").into());
     }
@@ -76,7 +128,7 @@ fn validate_documents(documents: &[Value]) -> Result<Vec<AgentWaitMessage>> {
         per_message_normative(document)?;
         let message: AgentWaitMessage = serde_json::from_value(document.clone())
             .map_err(|_| ValidationError::new("/", "typed_decode"))?;
-        typed.push(message);
+        typed.push(AdmittedMessage(message));
     }
     set_rules(documents)?;
     Ok(typed)
@@ -802,5 +854,20 @@ mod tests {
         }"#;
         let err = validate_message(raw).unwrap_err();
         assert!(err.to_string().contains("undeclared_message_type"));
+    }
+
+    #[test]
+    fn deserialize_is_not_admission() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../schemas/v0/rejects/normative/reject-deadline-ordering.json");
+        let raw = std::fs::read_to_string(&path).expect("read deadline-ordering reject");
+        let typed: AgentWaitMessage =
+            serde_json::from_str(&raw).expect("Deserialize can succeed without admission");
+        assert!(matches!(typed, AgentWaitMessage::LiveWaitRequest(_)));
+        let err = validate_message(&raw).expect_err("admission must still reject");
+        assert!(err
+            .to_string()
+            .contains("must_be_at_or_before_logical_deadline"));
+        assert!(!err.to_string().contains("2026-08-15T18:00:00Z"));
     }
 }
