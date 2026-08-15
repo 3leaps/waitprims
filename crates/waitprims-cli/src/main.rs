@@ -37,10 +37,7 @@ enum Command {
     Validate {
         /// File or directory of `agent-wait/v0` JSON documents.
         #[arg(long, value_name = "PATH")]
-        input: Option<PathBuf>,
-        /// Positional alias for `--input`.
-        #[arg(value_name = "PATH")]
-        path: Option<PathBuf>,
+        input: PathBuf,
     },
     /// Replay a scripted live first-match wait.
     Wait,
@@ -71,7 +68,17 @@ fn init_tracing(format: LogFormat, level: tracing::Level) {
 }
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(err) => {
+            let _ = err.print();
+            return if err.use_stderr() {
+                ExitCode::from(1)
+            } else {
+                ExitCode::SUCCESS
+            };
+        }
+    };
     init_tracing(cli.log_format, cli.log_level);
 
     match cli.command {
@@ -90,23 +97,17 @@ Diagnostic CLI. The library is the product; there is no daemon.",
                 ExitCode::from(1)
             }
         },
-        Some(Command::Validate { input, path }) => match resolve_validate_target(input, path) {
-            Ok(target) => match validate_path(&target) {
-                Ok(count) => {
-                    println!(
-                        "{}",
-                        serde_json::json!({
-                            "ok": true,
-                            "documents": count
-                        })
-                    );
-                    ExitCode::SUCCESS
-                }
-                Err(err) => {
-                    eprintln!("waitprims validate: {err}");
-                    ExitCode::from(1)
-                }
-            },
+        Some(Command::Validate { input }) => match validate_path(&input) {
+            Ok(count) => {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "ok": true,
+                        "documents": count
+                    })
+                );
+                ExitCode::SUCCESS
+            }
             Err(err) => {
                 eprintln!("waitprims validate: {err}");
                 ExitCode::from(1)
@@ -122,17 +123,6 @@ Diagnostic CLI. The library is the product; there is no daemon.",
             eprintln!("waitprims {name}: not implemented yet");
             ExitCode::from(1)
         }
-    }
-}
-
-fn resolve_validate_target(
-    input: Option<PathBuf>,
-    path: Option<PathBuf>,
-) -> Result<PathBuf, waitprims_core::Error> {
-    match (input, path) {
-        (Some(target), None) | (None, Some(target)) => Ok(target),
-        (Some(_), Some(_)) => Err(ValidationError::new("target", "input_and_positional").into()),
-        (None, None) => Err(ValidationError::new("target", "missing").into()),
     }
 }
 

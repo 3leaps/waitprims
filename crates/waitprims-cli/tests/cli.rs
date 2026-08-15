@@ -20,7 +20,7 @@ fn validate_input(target: &Path) -> std::process::Output {
 #[test]
 fn version_includes_dev_suffix() {
     let output = bin().arg("--version").output().expect("run --version");
-    assert!(output.status.success());
+    assert_eq!(output.status.code(), Some(0));
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains("0.1.0-dev"),
@@ -35,7 +35,7 @@ fn version_includes_dev_suffix() {
 #[test]
 fn help_mentions_diagnostic_cli() {
     let output = bin().arg("--help").output().expect("run --help");
-    assert!(output.status.success());
+    assert_eq!(output.status.code(), Some(0));
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains("Diagnostic CLI"),
@@ -49,11 +49,19 @@ fn validate_help_shows_input_flag() {
         .args(["validate", "--help"])
         .output()
         .expect("run validate --help");
-    assert!(output.status.success());
+    assert_eq!(output.status.code(), Some(0));
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains("--input"),
         "validate --help must show --input: {stdout}"
+    );
+    assert!(
+        !stdout.contains("[PATH]"),
+        "validate --help must not offer a positional path: {stdout}"
+    );
+    assert!(
+        !stdout.contains("Positional alias"),
+        "validate --help must not offer a positional alias: {stdout}"
     );
     assert!(
         !stdout.contains("--script"),
@@ -137,6 +145,70 @@ fn validate_input_baseline_set_dir_exits_zero() {
 fn validate_input_reject_set_dir_exits_one() {
     let path = vendor_root().join("rejects/set/reject-fairness-starvation");
     let output = validate_input(&path);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn validate_unknown_flag_exits_one() {
+    let output = bin()
+        .args(["validate", "--bogus"])
+        .output()
+        .expect("run validate --bogus");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn validate_input_missing_value_exits_one() {
+    let output = bin()
+        .args(["validate", "--input"])
+        .output()
+        .expect("run validate --input");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn invalid_log_format_exits_one() {
+    let path = vendor_root().join("examples/registration_set.example.json");
+    let output = bin()
+        .args(["--log-format", "yaml", "validate", "--input"])
+        .arg(&path)
+        .output()
+        .expect("run --log-format yaml");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn validate_positional_path_is_not_accepted() {
+    let path = vendor_root().join("examples/registration_set.example.json");
+    let output = bin()
+        .arg("validate")
+        .arg(&path)
+        .output()
+        .expect("run validate positional");
     assert_eq!(
         output.status.code(),
         Some(1),
