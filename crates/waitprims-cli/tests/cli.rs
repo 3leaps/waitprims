@@ -9,6 +9,10 @@ fn vendor_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../schemas/v0")
 }
 
+fn fixture_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/initial-case")
+}
+
 fn validate_input(target: &Path) -> std::process::Output {
     bin()
         .args(["validate", "--input"])
@@ -227,6 +231,141 @@ fn validate_rejects_uri_input() {
         !stderr.contains("example.invalid"),
         "stderr leaked URI: {stderr}"
     );
+    assert!(
+        stderr.contains("local_path_required"),
+        "expected local_path_required: {stderr}"
+    );
+}
+
+#[test]
+fn wait_help_shows_file_flags() {
+    let output = bin()
+        .args(["wait", "--help"])
+        .output()
+        .expect("wait --help");
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--registration-set"), "stdout={stdout}");
+    assert!(stdout.contains("--request"), "stdout={stdout}");
+    assert!(stdout.contains("--script"), "stdout={stdout}");
+    assert!(
+        !stdout.contains("--poll"),
+        "wait --help must not offer --poll"
+    );
+}
+
+#[test]
+fn wait_scripted_first_match_exits_zero_with_live_wait_outcome() {
+    let root = fixture_root();
+    let output = bin()
+        .args([
+            "wait",
+            "--registration-set",
+            root.join("registration_set.json").to_str().unwrap(),
+            "--request",
+            root.join("live_wait_request.json").to_str().unwrap(),
+            "--script",
+            root.join("live.json").to_str().unwrap(),
+        ])
+        .output()
+        .expect("run wait");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let value: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("stdout must be JSON");
+    assert_eq!(value["message_type"], "live_wait_outcome");
+    assert_eq!(value["outcome_kind"], "events");
+    assert_eq!(value["events"][0]["registration_id"], "reg:sms-1");
+    assert_eq!(value["events"][0]["method_id"], "sms_inbound");
+}
+
+#[test]
+fn wait_unknown_flag_exits_one() {
+    let output = bin()
+        .args(["wait", "--bogus"])
+        .output()
+        .expect("wait --bogus");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn wait_missing_script_exits_one() {
+    let root = fixture_root();
+    let output = bin()
+        .args([
+            "wait",
+            "--registration-set",
+            root.join("registration_set.json").to_str().unwrap(),
+            "--request",
+            root.join("live_wait_request.json").to_str().unwrap(),
+        ])
+        .output()
+        .expect("wait missing --script");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn wait_rejects_uri_without_leaking_hostname() {
+    let root = fixture_root();
+    let output = bin()
+        .args([
+            "wait",
+            "--registration-set",
+            root.join("registration_set.json").to_str().unwrap(),
+            "--request",
+            "https://example.invalid/live_wait_request.json",
+            "--script",
+            root.join("live.json").to_str().unwrap(),
+        ])
+        .output()
+        .expect("wait uri request");
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("example.invalid"),
+        "stderr leaked hostname: {stderr}"
+    );
+    assert!(
+        stderr.contains("local_path_required"),
+        "expected local_path_required: {stderr}"
+    );
+}
+
+#[test]
+fn wait_rejects_dash_script() {
+    let root = fixture_root();
+    let output = bin()
+        .args([
+            "wait",
+            "--registration-set",
+            root.join("registration_set.json").to_str().unwrap(),
+            "--request",
+            root.join("live_wait_request.json").to_str().unwrap(),
+            "--script",
+            "-",
+        ])
+        .output()
+        .expect("wait dash script");
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("local_path_required"),
         "expected local_path_required: {stderr}"
