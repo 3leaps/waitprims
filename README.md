@@ -5,7 +5,7 @@
 
 **Reliable event wait without a daemon.**
 
-waitprims is a library-first wait primitive for agent seats and services. It owns typed observe, wait, deliver, and activate — first-match fan-in when you can block, one bounded poll-cycle when you cannot — and keeps those receipts distinct. Provider clients, daemons, and durable timers stay out of this crate.
+waitprims is a library-first wait primitive for agent seats and services. It will provide typed observe, wait, deliver, and activate — first-match fan-in when you can block, one bounded poll-cycle when you cannot — and keep those receipts distinct. Provider clients, daemons, and durable timers stay out of this crate.
 
 The problem it retires: every adapter reinventing anchors, deadlines, cancellation, and “we posted, so the agent woke.”
 
@@ -13,7 +13,7 @@ The problem it retires: every adapter reinventing anchors, deadlines, cancellati
 
 ## What this is
 
-- Implements Crucible `contract: agent-wait/v0`
+- Targets Crucible `contract: agent-wait/v0` (see Status)
 - MIT OR Apache-2.0
 - No daemon, no provider SDKs, no durable timer ledger
 - Adapters live with their domain owner, not in this library
@@ -51,6 +51,8 @@ refs when a caller uses them.
 ## Status
 
 This tree is an early scaffold (`0.1.0-dev`). APIs are not stable.
+
+Pinned `contract: agent-wait/v0` at Crucible `f1912957cde19b2b1e7809e430cc28dc417287cc`. See [`schemas/v0/PIN.md`](schemas/v0/PIN.md).
 
 ## Development
 

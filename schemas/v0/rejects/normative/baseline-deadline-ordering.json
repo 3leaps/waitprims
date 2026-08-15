@@ -1,0 +1,14 @@
+{
+  "capabilities": ["contract: agent-wait/v0"],
+  "message_type": "live_wait_request",
+  "message_id": "msg:aw-live-req-1",
+  "correlation_id": "corr:aw-1",
+  "created_at": "2026-08-15T16:01:00Z",
+  "actor_ref": "seat:consumer-a",
+  "causation_id": "msg:aw-reg-1",
+  "waiter_id": "waiter:seat-consumer-a",
+  "registration_set_ref": "msg:aw-reg-1",
+  "registration_revision": "regrev-1",
+  "logical_deadline": "2026-08-15T17:00:00Z",
+  "run_deadline": "2026-08-15T16:20:00Z"
+}

@@ -25,3 +25,13 @@ fn help_mentions_diagnostic_cli() {
         "unexpected --help output: {stdout}"
     );
 }
+
+#[test]
+fn schema_prints_capability_and_pin() {
+    let output = bin().arg("schema").output().expect("run schema");
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("contract: agent-wait/v0"));
+    assert!(stdout.contains("agent-wait-message.schema.json"));
+    assert!(stdout.contains("f1912957cde19b2b1e7809e430cc28dc417287cc"));
+}

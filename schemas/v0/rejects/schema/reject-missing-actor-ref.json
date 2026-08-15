@@ -1,0 +1,40 @@
+{
+  "capabilities": ["contract: agent-wait/v0"],
+  "message_type": "registration_set",
+  "message_id": "msg:aw-reg-1",
+  "correlation_id": "corr:aw-1",
+  "created_at": "2026-08-15T16:00:00Z",
+  "principal_ref": "seat:consumer-a",
+  "waiter_id": "waiter:seat-consumer-a",
+  "seat_ref": "seat:consumer-a",
+  "registration_revision": "regrev-1",
+  "registrations": [
+    {
+      "registration_id": "reg:job-complete-1",
+      "method_id": "job_complete",
+      "subject_kind": "service_job",
+      "subject_id": "job:transcribe-1",
+      "baseline_policy": "latest",
+      "required": true,
+      "source_instance_ref": "source:provider-a",
+      "predicate_ref": "pred:job-complete",
+      "capability_ref": "cap:wait",
+      "lease_expires_at": "2026-08-16T00:00:00Z",
+      "bounds": {
+        "max_events": 50,
+        "max_bytes": 524288
+      }
+    }
+  ],
+  "logical_deadline": "2026-08-15T17:00:00Z",
+  "authn_mode": "optional",
+  "aggregate_limits": {
+    "max_events": 100,
+    "max_bytes": 1048576
+  },
+  "registration_digest": {
+    "canonicalization": "rfc8785",
+    "algorithm": "sha256",
+    "value": "cb5c843991542fca328ea9916d810e601f83429a496bd94986a1e7b5cfbeb7c1"
+  }
+}
