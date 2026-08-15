@@ -1063,6 +1063,122 @@ async fn collection_stops_at_payload_ref_and_byte_bounds() {
     );
 }
 
+#[tokio::test]
+async fn deferred_same_instant_event_replays_after_fairness_rotate() {
+    let set = two_arm_set();
+    let at = "2026-08-15T16:05:00Z";
+    let script = Script {
+        buffer_limit: 8,
+        events: vec![
+            wait_event("reg:chanvoy-1", "chanvoy_wait", "evt:left", at),
+            wait_event("reg:sms-1", "sms_inbound", "evt:right", at),
+        ],
+    };
+    let mut first = poll_cycle_request(&set);
+    first.bound = Some(PollBound {
+        max_events: Some(1),
+        max_payload_refs: None,
+        max_bytes: None,
+    });
+    first.fairness_cursor = IdToken::new("fair:start");
+    let clock = FakeClock::auto(first.created_at.clone());
+    let observer = ScriptedObserver::new(script, clock.clone());
+    let left = run_cycle(&set, &first, &observer, &clock).await;
+    assert_eq!(left.outcome_kind, OutcomeKind::Partial);
+    assert_eq!(
+        left.events
+            .iter()
+            .map(|event| event.event_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["evt:left"]
+    );
+    assert_eq!(
+        left.arms
+            .iter()
+            .find(|arm| arm.registration_id.as_str() == "reg:sms-1")
+            .map(|arm| arm.status),
+        Some(ArmStatus::Deferred)
+    );
+
+    let mut second = first.clone();
+    second.message_id = IdToken::new("msg:aw-poll-req-2");
+    second.fairness_cursor = left.next_fairness_cursor.clone();
+    assert_ne!(
+        second.fairness_cursor.as_str(),
+        first.fairness_cursor.as_str()
+    );
+    let right = run_cycle(&set, &second, &observer, &clock).await;
+    assert_eq!(
+        right
+            .events
+            .iter()
+            .map(|event| event.event_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["evt:right"],
+        "deferred same-instant event must restore for the rotated cycle: {:?}",
+        right.events
+    );
+    assert_eq!(right.outcome_kind, OutcomeKind::Partial);
+    assert_eq!(observer.live_bind_count(), 0);
+}
+
+#[tokio::test]
+async fn oversized_first_event_is_restored_not_dropped() {
+    let set = registration_set(vec![registration(
+        "reg:sms-1",
+        "sms_inbound",
+        "sms:inbox-1",
+    )]);
+    let sample = wait_event(
+        "reg:sms-1",
+        "sms_inbound",
+        "evt:oversized",
+        "2026-08-15T16:05:00Z",
+    );
+    let surface = event_surface_bytes(&sample);
+    assert!(surface > 1);
+    let script = Script {
+        buffer_limit: 8,
+        events: vec![sample],
+    };
+    let mut tight = poll_cycle_request(&set);
+    tight.bound = Some(PollBound {
+        max_events: None,
+        max_payload_refs: None,
+        max_bytes: Some(1),
+    });
+    let clock = FakeClock::auto(tight.created_at.clone());
+    let observer = ScriptedObserver::new(script, clock.clone());
+    let first = run_cycle(&set, &tight, &observer, &clock).await;
+    assert!(
+        first.events.is_empty(),
+        "oversized event must not be kept: {:?}",
+        first.events
+    );
+    assert_ne!(first.outcome_kind, OutcomeKind::Events);
+    assert!(!first.coverage_complete);
+
+    let mut room = tight.clone();
+    room.message_id = IdToken::new("msg:aw-poll-req-2");
+    room.bound = Some(PollBound {
+        max_events: None,
+        max_payload_refs: None,
+        max_bytes: Some(surface),
+    });
+    let second = run_cycle(&set, &room, &observer, &clock).await;
+    assert_eq!(
+        second
+            .events
+            .iter()
+            .map(|event| event.event_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["evt:oversized"],
+        "rejected first event must restore for a later cycle: {:?}",
+        second.events
+    );
+    assert_eq!(observer.live_bind_count(), 0);
+}
+
 #[test]
 fn maps_stay_keyed_by_registration_id() {
     let mut retained_through = BTreeMap::new();

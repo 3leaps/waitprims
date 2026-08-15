@@ -8,6 +8,7 @@
 //! Acknowledged anchors are applied at bind. Pending binds never mint a
 //! provider cursor. Collection stops when representable bounds are exhausted.
 
+use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
@@ -435,7 +436,7 @@ where
                     let mut ready = ready?;
                     let indexed = pending_refs(&bound, &pending);
                     extend_ready_refs(observer, &indexed, &mut ready);
-                    record_ready(observer, set, request, &bound, &mut budget, &mut visits, &ready);
+                    record_ready(observer, set, request, &bound, &mut budget, &mut visits, ready);
                     if visits.len() == set.registrations.len() {
                         return assemble(set, request, clock.now(), &starts, &visits);
                     }
@@ -447,7 +448,7 @@ where
                     let mut observations = Vec::new();
                     let indexed = occupied_refs(&bound);
                     extend_ready_refs(observer, &indexed, &mut observations);
-                    record_ready(observer, set, request, &bound, &mut budget, &mut visits, &observations);
+                    record_ready(observer, set, request, &bound, &mut budget, &mut visits, observations);
                     if visits.len() == set.registrations.len() {
                         return assemble(
                             set,
@@ -473,7 +474,7 @@ where
                     let mut ready = Vec::new();
                     let indexed = pending_refs(&bound, &pending);
                     extend_ready_refs(observer, &indexed, &mut ready);
-                    record_ready(observer, set, request, &bound, &mut budget, &mut visits, &ready);
+                    record_ready(observer, set, request, &bound, &mut budget, &mut visits, ready);
                     return decide_at_deadline(set, request, &now, &starts, &visits);
                 }
             }
@@ -490,7 +491,7 @@ where
                 let mut observations = Vec::new();
                 let indexed = occupied_refs(&bound);
                 extend_ready_refs(observer, &indexed, &mut observations);
-                record_ready(observer, set, request, &bound, &mut budget, &mut visits, &observations);
+                record_ready(observer, set, request, &bound, &mut budget, &mut visits, observations);
                 if visits.len() == set.registrations.len() {
                     return assemble(
                         set,
@@ -535,6 +536,17 @@ fn extend_ready_refs<O: Observer>(
     }
 }
 
+fn restore_observation<O: Observer>(observer: &O, bind: Option<&O::Bind>, obs: Observation) {
+    if let Some(bind) = bind {
+        observer.restore_ready(bind, obs);
+    }
+}
+
+fn defer_ready<O: Observer>(observer: &O, bind: Option<&O::Bind>, obs: Observation) -> ArmVisit {
+    restore_observation(observer, bind, obs);
+    ArmVisit::Deferred
+}
+
 fn record_ready<O: Observer>(
     observer: &O,
     set: &RegistrationSet,
@@ -542,11 +554,18 @@ fn record_ready<O: Observer>(
     binds: &[Option<O::Bind>],
     budget: &mut CollectBudget,
     visits: &mut BTreeMap<usize, ArmVisit>,
-    ready: &[(usize, Observation)],
+    ready: Vec<(usize, Observation)>,
 ) {
     let mut ready_map: BTreeMap<usize, Observation> = BTreeMap::new();
     for (idx, obs) in ready {
-        ready_map.entry(*idx).or_insert_with(|| obs.clone());
+        match ready_map.entry(idx) {
+            Entry::Vacant(slot) => {
+                slot.insert(obs);
+            }
+            Entry::Occupied(_) => {
+                restore_observation(observer, binds.get(idx).and_then(|bind| bind.as_ref()), obs);
+            }
+        }
     }
     for idx in fairness_order(set, request) {
         if visits.contains_key(&idx) {
@@ -555,20 +574,15 @@ fn record_ready<O: Observer>(
         let Some(obs) = ready_map.remove(&idx) else {
             continue;
         };
+        let bind = binds.get(idx).and_then(|bind| bind.as_ref());
         if budget.exhausted() && matches!(obs, Observation::Event(_)) {
-            visits.insert(idx, ArmVisit::Deferred);
+            visits.insert(idx, defer_ready(observer, bind, obs));
             continue;
         }
-        visits.insert(
-            idx,
-            visit_from(
-                observer,
-                binds.get(idx).and_then(|bind| bind.as_ref()),
-                request,
-                budget,
-                &obs,
-            ),
-        );
+        visits.insert(idx, visit_from(observer, bind, request, budget, obs));
+    }
+    for (idx, obs) in ready_map {
+        restore_observation(observer, binds.get(idx).and_then(|bind| bind.as_ref()), obs);
     }
 }
 
@@ -577,13 +591,14 @@ fn visit_from<O: Observer>(
     bind: Option<&O::Bind>,
     request: &PollCycleRequest,
     budget: &mut CollectBudget,
-    obs: &Observation,
+    obs: Observation,
 ) -> ArmVisit {
     match obs {
         Observation::Event(event) => {
-            let stamped = stamp_activation(event.as_ref().clone(), request);
+            let original = *event;
+            let stamped = stamp_activation(original.clone(), request);
             if !budget.try_take(&stamped) {
-                return ArmVisit::Deferred;
+                return defer_ready(observer, bind, Observation::Event(Box::new(original)));
             }
             let mut events = vec![stamped];
             let truncated = bind
@@ -631,14 +646,18 @@ fn drain_ready<O: Observer>(
                 let original = *event;
                 let stamped = stamp_activation(original.clone(), request);
                 if !budget.try_take(&stamped) {
-                    observer.restore_ready(bind, Observation::Event(Box::new(original)));
+                    restore_observation(
+                        observer,
+                        Some(bind),
+                        Observation::Event(Box::new(original)),
+                    );
                     return true;
                 }
                 events.push(stamped);
             }
             Observation::Overflow => return true,
             other => {
-                observer.restore_ready(bind, other);
+                restore_observation(observer, Some(bind), other);
                 return false;
             }
         }

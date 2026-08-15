@@ -329,6 +329,10 @@ impl Observer for IdleObserver {
         self.tracker.cancel(bind.registration_id.as_str());
         Ok(())
     }
+
+    fn restore_ready(&self, _bind: &Self::Bind, _obs: Observation) {
+        // `poll_ready` is the default no-dequeue impl; `next` synthesizes Idle.
+    }
 }
 
 /// Observer whose [`Observer::poll_ready`] never runs dry.
@@ -339,6 +343,7 @@ impl Observer for IdleObserver {
 pub struct EndlessReadyObserver {
     tracker: BindTracker,
     seq: Arc<AtomicU64>,
+    restored: Arc<Mutex<BTreeMap<String, VecDeque<WaitEvent>>>>,
 }
 
 impl EndlessReadyObserver {
@@ -367,6 +372,19 @@ impl EndlessReadyObserver {
         };
         event
     }
+
+    fn take(&self, bind: &TrackedBind) -> WaitEvent {
+        if let Some(event) = self
+            .restored
+            .lock()
+            .expect("observer")
+            .get_mut(bind.registration_id.as_str())
+            .and_then(|queue| queue.pop_front())
+        {
+            return event;
+        }
+        self.mint(bind)
+    }
 }
 
 impl Observer for EndlessReadyObserver {
@@ -382,7 +400,7 @@ impl Observer for EndlessReadyObserver {
     }
 
     async fn next(&self, bind: &Self::Bind) -> Result<Observation> {
-        Ok(Observation::Event(Box::new(self.mint(bind))))
+        Ok(Observation::Event(Box::new(self.take(bind))))
     }
 
     async fn cancel(&self, bind: &Self::Bind) -> Result<()> {
@@ -391,6 +409,17 @@ impl Observer for EndlessReadyObserver {
     }
 
     fn poll_ready(&self, bind: &Self::Bind) -> Option<Observation> {
-        Some(Observation::Event(Box::new(self.mint(bind))))
+        Some(Observation::Event(Box::new(self.take(bind))))
+    }
+
+    fn restore_ready(&self, bind: &Self::Bind, obs: Observation) {
+        if let Observation::Event(event) = obs {
+            self.restored
+                .lock()
+                .expect("observer")
+                .entry(bind.registration_id.as_str().to_string())
+                .or_default()
+                .push_front(*event);
+        }
     }
 }

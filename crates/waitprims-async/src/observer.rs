@@ -78,14 +78,18 @@ pub trait Observer: Send + Sync {
     ///
     /// Used to collect same-instant ties and to prefer a ready event over a
     /// deadman when both fire at the same logical time. Default: none.
+    ///
+    /// A consuming implementation must pair every dequeue with
+    /// [`Self::restore_ready`]. There is no silent drop path.
     fn poll_ready(&self, _bind: &Self::Bind) -> Option<Observation> {
         None
     }
 
-    /// Put a [`Self::poll_ready`] observation back so it can replay.
+    /// Put a consumed observation back so a later cycle can replay it.
     ///
-    /// Called when collection inspects an item it cannot accept under the
-    /// remaining bound. Default: drop. Observers that dequeue in
-    /// [`Self::poll_ready`] should restore the item.
-    fn restore_ready(&self, _bind: &Self::Bind, _obs: Observation) {}
+    /// Required. The runner calls this for every rejected or deferred
+    /// owned observation, whether it came from [`Self::poll_ready`] or
+    /// [`Self::next`]. Implementations that never dequeue from
+    /// [`Self::poll_ready`] may no-op, but the method cannot be omitted.
+    fn restore_ready(&self, bind: &Self::Bind, obs: Observation);
 }
