@@ -1,13 +1,14 @@
 //! Scripted and idle observers.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use waitprims_async::{Observation, Observer};
 use waitprims_core::{Anchor, IdToken, Registration, Result, Timestamp, WaitEvent};
 
 use crate::bind::{resolve_start_at_bind, BindTracker, TrackedBind};
+use crate::case::wait_event;
 use crate::clock::FakeClock;
 use crate::script::Script;
 
@@ -34,6 +35,8 @@ pub struct ScriptedObserver {
     tracker: BindTracker,
     hang_binds: Arc<Mutex<BTreeSet<String>>>,
     hang_cancel: Arc<AtomicBool>,
+    bind_requested: Arc<Mutex<BTreeMap<String, Option<Anchor>>>>,
+    bind_resolved: Arc<Mutex<BTreeMap<String, Anchor>>>,
 }
 
 impl ScriptedObserver {
@@ -66,6 +69,8 @@ impl ScriptedObserver {
             tracker: BindTracker::new(),
             hang_binds: Arc::new(Mutex::new(BTreeSet::new())),
             hang_cancel: Arc::new(AtomicBool::new(false)),
+            bind_requested: Arc::new(Mutex::new(BTreeMap::new())),
+            bind_resolved: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
 
@@ -148,6 +153,16 @@ impl ScriptedObserver {
         self.tracker.cancelled_ids()
     }
 
+    /// `start_anchor` on the registration passed to [`Observer::bind`].
+    pub fn bind_requested_starts(&self) -> BTreeMap<String, Option<Anchor>> {
+        self.bind_requested.lock().expect("observer").clone()
+    }
+
+    /// Exclusive cursor resolved at bind.
+    pub fn bind_resolved_starts(&self) -> BTreeMap<String, Anchor> {
+        self.bind_resolved.lock().expect("observer").clone()
+    }
+
     fn take_due(&self, registration_id: &str) -> Option<Observation> {
         if let Some(fault) = self.fault_observation(registration_id) {
             return Some(fault);
@@ -217,9 +232,18 @@ impl Observer for ScriptedObserver {
         }
         self.tracker.acquire(registration.registration_id.as_str());
         let script_head = self.script_head(registration.registration_id.as_str());
+        let resolved = resolve_start_at_bind(registration, script_head);
+        self.bind_requested.lock().expect("observer").insert(
+            registration.registration_id.as_str().to_string(),
+            registration.start_anchor.clone(),
+        );
+        self.bind_resolved.lock().expect("observer").insert(
+            registration.registration_id.as_str().to_string(),
+            resolved.clone(),
+        );
         Ok(TrackedBind::new(
             registration.registration_id.clone(),
-            resolve_start_at_bind(registration, script_head),
+            resolved,
             self.tracker.clone(),
         ))
     }
@@ -292,5 +316,69 @@ impl Observer for IdleObserver {
     async fn cancel(&self, bind: &Self::Bind) -> Result<()> {
         self.tracker.cancel(bind.registration_id.as_str());
         Ok(())
+    }
+}
+
+/// Observer whose [`Observer::poll_ready`] never runs dry.
+///
+/// Used to prove collection stops at representable bounds instead of
+/// buffering an unbounded ready stream.
+#[derive(Clone, Default)]
+pub struct EndlessReadyObserver {
+    tracker: BindTracker,
+    seq: Arc<AtomicU64>,
+}
+
+impl EndlessReadyObserver {
+    /// Continuously-ready observer.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Binds that have not been released.
+    pub fn live_bind_count(&self) -> usize {
+        self.tracker.live_count()
+    }
+
+    fn mint(&self, bind: &TrackedBind) -> WaitEvent {
+        let n = self.seq.fetch_add(1, Ordering::Relaxed);
+        let mut event = wait_event(
+            bind.registration_id.as_str(),
+            "method",
+            &format!("evt:endless-{n}"),
+            "2026-08-15T16:01:00Z",
+        );
+        event.start_anchor = bind.resolved_start.clone();
+        event.proposed_next_anchor = Anchor {
+            kind: event.proposed_next_anchor.kind,
+            value: IdToken::new(format!("anc:after-endless-{n}")),
+        };
+        event
+    }
+}
+
+impl Observer for EndlessReadyObserver {
+    type Bind = TrackedBind;
+
+    async fn bind(&self, registration: &Registration) -> Result<Self::Bind> {
+        self.tracker.acquire(registration.registration_id.as_str());
+        Ok(TrackedBind::new(
+            registration.registration_id.clone(),
+            resolve_start_at_bind(registration, None),
+            self.tracker.clone(),
+        ))
+    }
+
+    async fn next(&self, bind: &Self::Bind) -> Result<Observation> {
+        Ok(Observation::Event(Box::new(self.mint(bind))))
+    }
+
+    async fn cancel(&self, bind: &Self::Bind) -> Result<()> {
+        self.tracker.cancel(bind.registration_id.as_str());
+        Ok(())
+    }
+
+    fn poll_ready(&self, bind: &Self::Bind) -> Option<Observation> {
+        Some(Observation::Event(Box::new(self.mint(bind))))
     }
 }

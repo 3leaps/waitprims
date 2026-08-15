@@ -19,7 +19,7 @@ pub use cancel::Cancel;
 pub use clock::Clock;
 pub use first_match::{run_first_match, TIE_RULE};
 pub use observer::{BindHandle, Observation, Observer};
-pub use poll_cycle::run_poll_cycle;
+pub use poll_cycle::{event_surface_bytes, run_poll_cycle};
 pub use waitprims_core::{Error, Result};
 
 #[cfg(test)]

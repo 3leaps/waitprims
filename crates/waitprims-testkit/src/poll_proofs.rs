@@ -3,16 +3,16 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use waitprims_async::{run_poll_cycle, Cancel};
+use waitprims_async::{event_surface_bytes, run_poll_cycle, Cancel};
 use waitprims_core::{
     validate_message, validate_raw_documents, AgentWaitMessage, Anchor, AnchorKind, ArmStatus,
-    IdToken, OutcomeKind, PollCycleAck, PollCycleOutcome, Timestamp,
+    IdToken, OutcomeKind, PollBound, PollCycleAck, PollCycleOutcome, Timestamp,
 };
 
 use crate::{
     ack_poll_outcome, exclusive_head_anchor, poll_cycle_request, registration,
-    registration_baseline, registration_set, ts, wait_event, FakeClock, IdleObserver, Script,
-    ScriptedObserver,
+    registration_baseline, registration_set, ts, wait_event, EndlessReadyObserver, FakeClock,
+    IdleObserver, Script, ScriptedObserver,
 };
 
 fn admit(outcome: &PollCycleOutcome) {
@@ -573,6 +573,19 @@ async fn hanging_required_bind_is_failed_not_clean() {
     assert_ne!(outcome.outcome_kind, OutcomeKind::LogicalDeadman);
     assert!(!outcome.coverage_complete);
     assert_eq!(observer.live_bind_count(), 0);
+    assert!(
+        outcome
+            .arms
+            .iter()
+            .all(|arm| arm.registration_id.as_str() != "reg:chanvoy-1"),
+        "pending baseline bind must not emit a fabricated arm: {:?}",
+        outcome.arms
+    );
+    let json = serde_json::to_string(&outcome).expect("serialize");
+    assert!(
+        !json.contains("anc:h-chanvoy-1"),
+        "pending baseline bind must not invent anc:h-…: {json}"
+    );
 }
 
 #[tokio::test]
@@ -625,6 +638,221 @@ async fn cancel_during_poll_is_cancelled() {
     admit(&outcome);
     assert_eq!(outcome.outcome_kind, OutcomeKind::Cancelled);
     assert_eq!(observer.live_bind_count(), 0);
+}
+
+#[tokio::test]
+async fn fairness_cursor_rotates_scarce_capacity() {
+    let set = two_arm_set();
+    let at = "2026-08-15T16:05:00Z";
+    let noisy = Script {
+        buffer_limit: 8,
+        events: vec![
+            wait_event("reg:chanvoy-1", "chanvoy_wait", "evt:chanvoy-1", at),
+            wait_event("reg:sms-1", "sms_inbound", "evt:sms-1", at),
+        ],
+    };
+    let mut first = poll_cycle_request(&set);
+    first.bound = Some(PollBound {
+        max_events: Some(1),
+        max_payload_refs: None,
+        max_bytes: None,
+    });
+    first.fairness_cursor = IdToken::new("fair:start");
+    let mut second = first.clone();
+    second.message_id = IdToken::new("msg:aw-poll-req-2");
+    second.fairness_cursor = IdToken::new("fair:arm:sms-1");
+    assert_eq!(first.run_deadline, second.run_deadline);
+    assert_eq!(first.bound, second.bound);
+    assert_eq!(first.logical_deadline, second.logical_deadline);
+    assert_ne!(first.fairness_cursor, second.fairness_cursor);
+
+    let clock = FakeClock::auto(first.created_at.clone());
+    let observer = ScriptedObserver::new(noisy.clone(), clock.clone());
+    let left = run_cycle(&set, &first, &observer, &clock).await;
+    let clock = FakeClock::auto(second.created_at.clone());
+    let observer = ScriptedObserver::new(noisy, clock.clone());
+    let right = run_cycle(&set, &second, &observer, &clock).await;
+
+    assert_eq!(left.events.len(), 1);
+    assert_eq!(right.events.len(), 1);
+    assert_eq!(left.events[0].registration_id.as_str(), "reg:chanvoy-1");
+    assert_eq!(right.events[0].registration_id.as_str(), "reg:sms-1");
+    assert_eq!(
+        left.arms
+            .iter()
+            .find(|arm| arm.registration_id.as_str() == "reg:sms-1")
+            .map(|arm| arm.status),
+        Some(ArmStatus::Deferred)
+    );
+    assert_eq!(
+        right
+            .arms
+            .iter()
+            .find(|arm| arm.registration_id.as_str() == "reg:chanvoy-1")
+            .map(|arm| arm.status),
+        Some(ArmStatus::Deferred)
+    );
+    assert_eq!(left.outcome_kind, OutcomeKind::Partial);
+    assert_eq!(right.outcome_kind, OutcomeKind::Partial);
+}
+
+#[tokio::test]
+async fn acknowledged_anchor_is_the_bind_start() {
+    let set = registration_set(vec![registration(
+        "reg:sms-1",
+        "sms_inbound",
+        "sms:inbox-1",
+    )]);
+    let request = poll_cycle_request(&set);
+    let script = Script {
+        buffer_limit: 8,
+        events: vec![wait_event(
+            "reg:sms-1",
+            "sms_inbound",
+            "evt:sms-1",
+            "2026-08-15T16:05:00Z",
+        )],
+    };
+    let clock = FakeClock::auto(request.created_at.clone());
+    let first_observer = ScriptedObserver::new(script, clock.clone());
+    let first = run_cycle(&set, &request, &first_observer, &clock).await;
+    let ack = ack_poll_outcome(&first);
+    let committed = ack
+        .committed_anchors
+        .get("reg:sms-1")
+        .expect("committed")
+        .clone();
+    assert_ne!(committed.value.as_str(), "anc:cursor-0");
+
+    let mut second_req = request.clone();
+    second_req.message_id = IdToken::new("msg:aw-poll-req-2");
+    second_req.acknowledged_anchors = ack.committed_anchors.clone();
+    let clock = FakeClock::auto(second_req.created_at.clone());
+    let second_observer = ScriptedObserver::new(Script::default(), clock.clone());
+    let second = run_cycle(&set, &second_req, &second_observer, &clock).await;
+    assert_eq!(
+        second_observer.bind_requested_starts().get("reg:sms-1"),
+        Some(&Some(committed.clone()))
+    );
+    assert_eq!(
+        second_observer.bind_resolved_starts().get("reg:sms-1"),
+        Some(&committed)
+    );
+    assert_eq!(
+        second
+            .arms
+            .iter()
+            .find(|arm| arm.registration_id.as_str() == "reg:sms-1")
+            .map(|arm| &arm.start_anchor),
+        Some(&committed)
+    );
+
+    let mut unknown = request.clone();
+    unknown
+        .acknowledged_anchors
+        .insert("reg:not-in-set".to_string(), committed.clone());
+    let clock = FakeClock::auto(unknown.created_at.clone());
+    let observer = ScriptedObserver::new(Script::default(), clock.clone());
+    let err = run_poll_cycle(&set, &unknown, &observer, &clock, &Cancel::new())
+        .await
+        .expect_err("unknown ack key");
+    assert!(
+        err.to_string().contains("unknown_registration"),
+        "unexpected unknown-ack error: {err}"
+    );
+}
+
+#[tokio::test]
+async fn pending_baseline_bind_does_not_invent_anchor() {
+    let set = three_arm_baseline_set();
+    let request = poll_cycle_request(&set);
+    let clock = FakeClock::auto(request.created_at.clone());
+    let observer = ScriptedObserver::new(Script::default(), clock.clone());
+    for registration in &set.registrations {
+        observer.hang_bind(registration.registration_id.as_str());
+    }
+    let err = run_poll_cycle(&set, &request, &observer, &clock, &Cancel::new())
+        .await
+        .expect_err("no honest start without bind");
+    assert!(
+        err.to_string().contains("unresolved_start")
+            || err.to_string().contains("required_bind_pending"),
+        "unexpected pending-bind error: {err}"
+    );
+    assert!(!err.to_string().contains("anc:h-"));
+}
+
+#[tokio::test]
+async fn collection_stops_at_payload_ref_and_byte_bounds() {
+    let set = two_arm_set();
+    let sample = wait_event(
+        "reg:chanvoy-1",
+        "chanvoy_wait",
+        "evt:sample",
+        "2026-08-15T16:01:00Z",
+    );
+    let surface = event_surface_bytes(&sample);
+    assert!(surface > 0, "surface bytes are the observable contract");
+
+    let mut req = poll_cycle_request(&set);
+    req.bound = Some(PollBound {
+        max_events: None,
+        max_payload_refs: Some(1),
+        max_bytes: None,
+    });
+    let clock = FakeClock::auto(req.created_at.clone());
+    let observer = EndlessReadyObserver::new();
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        run_poll_cycle(&set, &req, &observer, &clock, &Cancel::new()),
+    )
+    .await
+    .expect("endless ready must not unbounded-drain")
+    .expect("poll cycle");
+    admit(&outcome);
+    assert_eq!(outcome.events.len(), 1);
+    assert_eq!(outcome.outcome_kind, OutcomeKind::Partial);
+    assert_eq!(observer.live_bind_count(), 0);
+    assert!(
+        outcome
+            .arms
+            .iter()
+            .any(|arm| arm.status == ArmStatus::Deferred),
+        "exhausted capacity must defer leftover arms: {:?}",
+        outcome.arms
+    );
+    assert_eq!(
+        outcome.arms.iter().map(|arm| arm.byte_count).sum::<u64>(),
+        surface
+    );
+
+    let mut bytes = poll_cycle_request(&set);
+    bytes.message_id = IdToken::new("msg:aw-poll-req-bytes");
+    bytes.bound = Some(PollBound {
+        max_events: None,
+        max_payload_refs: None,
+        max_bytes: Some(surface),
+    });
+    let clock = FakeClock::auto(bytes.created_at.clone());
+    let observer = EndlessReadyObserver::new();
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        run_poll_cycle(&set, &bytes, &observer, &clock, &Cancel::new()),
+    )
+    .await
+    .expect("byte bound must stop drain")
+    .expect("poll cycle");
+    admit(&outcome);
+    assert_eq!(outcome.events.len(), 1);
+    assert_eq!(outcome.outcome_kind, OutcomeKind::Partial);
+    assert_eq!(
+        outcome
+            .arms
+            .iter()
+            .find(|arm| arm.status == ArmStatus::Events)
+            .map(|arm| arm.byte_count),
+        Some(surface)
+    );
 }
 
 #[test]

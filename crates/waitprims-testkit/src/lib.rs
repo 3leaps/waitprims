@@ -15,10 +15,11 @@ pub use case::{
     registration_baseline, registration_set, ts, wait_event,
 };
 pub use clock::FakeClock;
-pub use observer::{IdleObserver, ScriptedObserver};
+pub use observer::{EndlessReadyObserver, IdleObserver, ScriptedObserver};
 pub use script::Script;
 pub use waitprims_async::{
-    run_poll_cycle, BindHandle, Cancel, Clock, Error, Observation, Observer, Result, TIE_RULE,
+    event_surface_bytes, run_poll_cycle, BindHandle, Cancel, Clock, Error, Observation, Observer,
+    Result, TIE_RULE,
 };
 
 #[cfg(test)]

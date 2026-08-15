@@ -1,9 +1,12 @@
 //! Bounded poll-cycle runner.
 //!
-//! One cycle: bind and observe in one race, apply fairness leftover at
-//! `run_deadline`, honor `logical_deadline`, and emit a `poll_cycle_outcome`.
+//! One cycle: bind and observe in one race, allocate visit/drain/cap from
+//! `fairness_cursor`, honor both deadlines, and emit a `poll_cycle_outcome`.
 //! Binding is not a serial preamble. After a decision the runner drops
 //! binds; it does not await [`Observer::cancel`].
+//!
+//! Acknowledged anchors are applied at bind. Pending binds never mint a
+//! provider cursor. Collection stops when representable bounds are exhausted.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -17,7 +20,7 @@ use crate::cancel::Cancel;
 use crate::clock::Clock;
 use crate::observer::{BindHandle, Observation, Observer};
 use crate::outcome::ResolvedStart;
-use crate::race::{bound_observation_is_terminal, observation_is_terminal, FirstReady};
+use crate::race::{observation_is_terminal, FirstReady};
 
 #[derive(Debug, Clone)]
 enum ArmVisit {
@@ -29,6 +32,121 @@ enum ArmVisit {
     CursorUncertain(String),
     Degraded(String),
     Deferred,
+}
+
+/// Byte weight of one event for poll-cycle bounds.
+///
+/// `payload_ref` is opaque; this crate does not fetch the referenced body.
+/// `max_bytes` and [`CoverageArm::byte_count`] therefore count the observable
+/// structured surface: the payload_ref token, the digest hex, and optional
+/// media_type. They do not estimate remote payload size.
+pub fn event_surface_bytes(event: &WaitEvent) -> u64 {
+    let mut n = event.payload.payload_ref.as_str().len() as u64;
+    n += event.payload.content_digest.value.len() as u64;
+    if let Some(media_type) = &event.payload.media_type {
+        n += media_type.len() as u64;
+    }
+    n
+}
+
+struct CollectBudget {
+    max_events: u64,
+    max_payload_refs: u64,
+    max_bytes: u64,
+    events: u64,
+    payload_refs: u64,
+    bytes: u64,
+    per_reg_events: BTreeMap<String, u64>,
+    per_reg_bytes: BTreeMap<String, u64>,
+    reg_max_events: BTreeMap<String, u64>,
+    reg_max_bytes: BTreeMap<String, u64>,
+}
+
+impl CollectBudget {
+    fn new(set: &RegistrationSet, request: &PollCycleRequest) -> Self {
+        let req_events = request
+            .bound
+            .as_ref()
+            .and_then(|bound| bound.max_events)
+            .unwrap_or(u64::MAX);
+        let req_bytes = request
+            .bound
+            .as_ref()
+            .and_then(|bound| bound.max_bytes)
+            .unwrap_or(u64::MAX);
+        let req_refs = request
+            .bound
+            .as_ref()
+            .and_then(|bound| bound.max_payload_refs)
+            .unwrap_or(u64::MAX);
+        Self {
+            max_events: set.aggregate_limits.max_events.min(req_events),
+            max_payload_refs: req_refs,
+            max_bytes: set.aggregate_limits.max_bytes.min(req_bytes),
+            events: 0,
+            payload_refs: 0,
+            bytes: 0,
+            per_reg_events: BTreeMap::new(),
+            per_reg_bytes: BTreeMap::new(),
+            reg_max_events: set
+                .registrations
+                .iter()
+                .map(|reg| {
+                    (
+                        reg.registration_id.as_str().to_string(),
+                        reg.bounds.max_events,
+                    )
+                })
+                .collect(),
+            reg_max_bytes: set
+                .registrations
+                .iter()
+                .map(|reg| {
+                    (
+                        reg.registration_id.as_str().to_string(),
+                        reg.bounds.max_bytes,
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    fn room_for_another_event(&self) -> bool {
+        self.events < self.max_events
+            && self.payload_refs < self.max_payload_refs
+            && self.bytes < self.max_bytes
+    }
+
+    fn exhausted(&self) -> bool {
+        !self.room_for_another_event() || self.bytes >= self.max_bytes
+    }
+
+    fn try_take(&mut self, event: &WaitEvent) -> bool {
+        if !self.room_for_another_event() {
+            return false;
+        }
+        let rid = event.registration_id.as_str();
+        let weight = event_surface_bytes(event);
+        let reg_events = self.per_reg_events.get(rid).copied().unwrap_or(0);
+        let reg_bytes = self.per_reg_bytes.get(rid).copied().unwrap_or(0);
+        let max_e = self.reg_max_events.get(rid).copied().unwrap_or(u64::MAX);
+        let max_b = self.reg_max_bytes.get(rid).copied().unwrap_or(u64::MAX);
+        if reg_events >= max_e {
+            return false;
+        }
+        if self.bytes.saturating_add(weight) > self.max_bytes {
+            return false;
+        }
+        if reg_bytes.saturating_add(weight) > max_b {
+            return false;
+        }
+        self.events = self.events.saturating_add(1);
+        self.payload_refs = self.payload_refs.saturating_add(1);
+        self.bytes = self.bytes.saturating_add(weight);
+        *self.per_reg_events.entry(rid.to_string()).or_insert(0) += 1;
+        *self.per_reg_bytes.entry(rid.to_string()).or_insert(0) += weight;
+        true
+    }
 }
 
 /// Resolve the cited registration set/revision and run one poll cycle.
@@ -65,18 +183,55 @@ fn resolve(set: &RegistrationSet, request: &PollCycleRequest) -> Result<()> {
     if request.waiter_id.as_str() != set.waiter_id.as_str() {
         return Err(ValidationError::new("/waiter_id", "mismatch").into());
     }
+    for key in request.acknowledged_anchors.keys() {
+        if !set
+            .registrations
+            .iter()
+            .any(|registration| registration.registration_id.as_str() == key)
+        {
+            return Err(
+                ValidationError::new("/acknowledged_anchors", "unknown_registration").into(),
+            );
+        }
+    }
     Ok(())
 }
 
-async fn bind_then_observe<O: Observer>(
+fn bind_registration(registration: &Registration, request: &PollCycleRequest) -> Registration {
+    let mut next = registration.clone();
+    if let Some(ack) = request
+        .acknowledged_anchors
+        .get(registration.registration_id.as_str())
+    {
+        next.start_anchor = Some(ack.clone());
+        next.baseline_policy = None;
+    }
+    next
+}
+
+async fn bind_one<O: Observer>(
     observer: &O,
-    registration: &Registration,
+    registration: Registration,
+    request: &PollCycleRequest,
     resolved: &Mutex<Vec<ResolvedStart>>,
-) -> Result<(O::Bind, Observation)> {
-    let bind = observer.bind(registration).await?;
+) -> Result<O::Bind> {
+    let bind = observer.bind(&registration).await?;
+    if let Some(expected) = request
+        .acknowledged_anchors
+        .get(registration.registration_id.as_str())
+    {
+        if bind.resolved_start() != expected {
+            return Err(
+                ValidationError::new("/acknowledged_anchors", "bind_start_mismatch").into(),
+            );
+        }
+    }
     record_resolved(resolved, &bind);
-    let observation = observer.next(&bind).await?;
-    Ok((bind, observation))
+    Ok(bind)
+}
+
+fn bind_is_terminal<B>(_: &B) -> bool {
+    true
 }
 
 fn record_resolved<B: BindHandle>(resolved: &Mutex<Vec<ResolvedStart>>, bind: &B) {
@@ -153,19 +308,20 @@ async fn observe_pending<O: Observer>(
 async fn bind_unbound<O: Observer>(
     observer: &O,
     set: &RegistrationSet,
+    request: &PollCycleRequest,
     unbound: &[usize],
     resolved: &Arc<Mutex<Vec<ResolvedStart>>>,
-) -> Result<Vec<(usize, (O::Bind, Observation))>> {
+) -> Result<Vec<(usize, O::Bind)>> {
     if unbound.is_empty() {
         std::future::pending::<()>().await;
     }
     let ready = FirstReady::new(
         unbound.iter().map(|&idx| {
             let resolved = Arc::clone(resolved);
-            let registration = &set.registrations[idx];
-            async move { bind_then_observe(observer, registration, &resolved).await }
+            let registration = bind_registration(&set.registrations[idx], request);
+            async move { bind_one(observer, registration, request, &resolved).await }
         }),
-        bound_observation_is_terminal,
+        bind_is_terminal,
     )
     .await?;
     Ok(remap_ready(unbound, ready))
@@ -190,6 +346,15 @@ fn required_binding_complete(set: &RegistrationSet, resolved: &[ResolvedStart]) 
         })
 }
 
+fn fairness_order(set: &RegistrationSet, request: &PollCycleRequest) -> Vec<usize> {
+    let n = set.registrations.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let start = fairness_start_index(set, request);
+    (0..n).map(|i| (start + i) % n).collect()
+}
+
 async fn run_loop<O, C>(
     set: &RegistrationSet,
     request: &PollCycleRequest,
@@ -205,47 +370,41 @@ where
     let mut any_bound = false;
     let resolved = Arc::new(Mutex::new(Vec::<ResolvedStart>::new()));
     let mut visits: BTreeMap<usize, ArmVisit> = BTreeMap::new();
+    let mut budget = CollectBudget::new(set, request);
+    let order = fairness_order(set, request);
     loop {
         if cancel.is_cancelled() {
-            return Ok(finish(
+            return finish(
                 set,
                 request,
                 clock.now(),
                 &snapshot(&resolved),
                 &visits,
                 Some("consumer_cancelled"),
-            ));
+            );
         }
         let starts = merge_starts(&starts_from_slots(&bound), &snapshot(&resolved));
         if deadline_reached(request, &clock.now()) {
-            return Ok(decide_at_deadline(
-                set,
-                request,
-                &clock.now(),
-                &starts,
-                &visits,
-            ));
+            return decide_at_deadline(set, request, &clock.now(), &starts, &visits);
         }
 
         let wait_until = earliest_deadline(request);
         if any_bound {
-            let pending: Vec<usize> = bound
+            let pending: Vec<usize> = order
                 .iter()
-                .enumerate()
-                .filter(|(idx, bind)| bind.is_some() && !visits.contains_key(idx))
-                .map(|(idx, _)| idx)
+                .copied()
+                .filter(|idx| bound[*idx].is_some() && !visits.contains_key(idx))
                 .collect();
             if pending.is_empty() && visits.len() == set.registrations.len() {
-                return Ok(assemble(set, request, clock.now(), &starts, &visits));
+                return assemble(set, request, clock.now(), &starts, &visits);
             }
-            let unbound: Vec<usize> = bound
+            let unbound: Vec<usize> = order
                 .iter()
-                .enumerate()
-                .filter(|(idx, slot)| slot.is_none() && !visits.contains_key(idx))
-                .map(|(idx, _)| idx)
+                .copied()
+                .filter(|idx| bound[*idx].is_none() && !visits.contains_key(idx))
                 .collect();
             if pending.is_empty() && unbound.is_empty() {
-                return Ok(assemble(set, request, clock.now(), &starts, &visits));
+                return assemble(set, request, clock.now(), &starts, &visits);
             }
             tokio::select! {
                 biased;
@@ -253,48 +412,46 @@ where
                     let mut ready = ready?;
                     let indexed = pending_refs(&bound, &pending);
                     extend_ready_refs(observer, &indexed, &mut ready);
-                    record_ready(observer, &bound, request, &mut visits, &ready);
+                    record_ready(observer, set, request, &bound, &mut budget, &mut visits, &ready);
                     if visits.len() == set.registrations.len() {
-                        return Ok(assemble(set, request, clock.now(), &starts, &visits));
+                        return assemble(set, request, clock.now(), &starts, &visits);
                     }
                 }
-                ready = bind_unbound(observer, set, &unbound, &resolved) => {
-                    let ready = ready?;
-                    let mut observations = Vec::new();
-                    for (idx, (bind, observation)) in ready {
-                        observations.push((idx, observation));
+                ready = bind_unbound(observer, set, request, &unbound, &resolved) => {
+                    for (idx, bind) in ready? {
                         bound[idx] = Some(bind);
                     }
+                    let mut observations = Vec::new();
                     let indexed = occupied_refs(&bound);
                     extend_ready_refs(observer, &indexed, &mut observations);
-                    record_ready(observer, &bound, request, &mut visits, &observations);
+                    record_ready(observer, set, request, &bound, &mut budget, &mut visits, &observations);
                     if visits.len() == set.registrations.len() {
-                        return Ok(assemble(
+                        return assemble(
                             set,
                             request,
                             clock.now(),
                             &starts_from_slots(&bound),
                             &visits,
-                        ));
+                        );
                     }
                 }
                 _ = cancel.cancelled() => {
-                    return Ok(finish(
+                    return finish(
                         set,
                         request,
                         clock.now(),
                         &starts,
                         &visits,
                         Some("consumer_cancelled"),
-                    ));
+                    );
                 }
                 _ = clock.sleep_until(wait_until) => {
                     let now = clock.now();
                     let mut ready = Vec::new();
                     let indexed = pending_refs(&bound, &pending);
                     extend_ready_refs(observer, &indexed, &mut ready);
-                    record_ready(observer, &bound, request, &mut visits, &ready);
-                    return Ok(decide_at_deadline(set, request, &now, &starts, &visits));
+                    record_ready(observer, set, request, &bound, &mut budget, &mut visits, &ready);
+                    return decide_at_deadline(set, request, &now, &starts, &visits);
                 }
             }
             continue;
@@ -302,44 +459,39 @@ where
 
         tokio::select! {
             biased;
-            ready = FirstReady::new(
-                set.registrations
-                    .iter()
-                    .map(|registration| {
-                        let resolved = Arc::clone(&resolved);
-                        async move { bind_then_observe(observer, registration, &resolved).await }
-                    }),
-                bound_observation_is_terminal,
-            ) => {
-                let ready = ready?;
-                let mut observations = Vec::new();
-                for (idx, (bind, observation)) in ready {
-                    observations.push((idx, observation));
+            ready = bind_unbound(observer, set, request, &order, &resolved) => {
+                for (idx, bind) in ready? {
                     bound[idx] = Some(bind);
                     any_bound = true;
                 }
+                let mut observations = Vec::new();
                 let indexed = occupied_refs(&bound);
                 extend_ready_refs(observer, &indexed, &mut observations);
-                let starts = starts_from_slots(&bound);
-                record_ready(observer, &bound, request, &mut visits, &observations);
+                record_ready(observer, set, request, &bound, &mut budget, &mut visits, &observations);
                 if visits.len() == set.registrations.len() {
-                    return Ok(assemble(set, request, clock.now(), &starts, &visits));
+                    return assemble(
+                        set,
+                        request,
+                        clock.now(),
+                        &starts_from_slots(&bound),
+                        &visits,
+                    );
                 }
             }
             _ = cancel.cancelled() => {
-                return Ok(finish(
+                return finish(
                     set,
                     request,
                     clock.now(),
                     &snapshot(&resolved),
                     &visits,
                     Some("consumer_cancelled"),
-                ));
+                );
             }
             _ = clock.sleep_until(wait_until) => {
                 let now = clock.now();
                 let starts = snapshot(&resolved);
-                return Ok(decide_at_deadline(set, request, &now, &starts, &visits));
+                return decide_at_deadline(set, request, &now, &starts, &visits);
             }
         }
     }
@@ -362,22 +514,36 @@ fn extend_ready_refs<O: Observer>(
 
 fn record_ready<O: Observer>(
     observer: &O,
-    binds: &[Option<O::Bind>],
+    set: &RegistrationSet,
     request: &PollCycleRequest,
+    binds: &[Option<O::Bind>],
+    budget: &mut CollectBudget,
     visits: &mut BTreeMap<usize, ArmVisit>,
     ready: &[(usize, Observation)],
 ) {
+    let mut ready_map: BTreeMap<usize, Observation> = BTreeMap::new();
     for (idx, obs) in ready {
-        if visits.contains_key(idx) {
+        ready_map.entry(*idx).or_insert_with(|| obs.clone());
+    }
+    for idx in fairness_order(set, request) {
+        if visits.contains_key(&idx) {
+            continue;
+        }
+        let Some(obs) = ready_map.remove(&idx) else {
+            continue;
+        };
+        if budget.exhausted() && matches!(obs, Observation::Event(_)) {
+            visits.insert(idx, ArmVisit::Deferred);
             continue;
         }
         visits.insert(
-            *idx,
+            idx,
             visit_from(
                 observer,
-                binds.get(*idx).and_then(|bind| bind.as_ref()),
+                binds.get(idx).and_then(|bind| bind.as_ref()),
                 request,
-                obs,
+                budget,
+                &obs,
             ),
         );
     }
@@ -387,13 +553,18 @@ fn visit_from<O: Observer>(
     observer: &O,
     bind: Option<&O::Bind>,
     request: &PollCycleRequest,
+    budget: &mut CollectBudget,
     obs: &Observation,
 ) -> ArmVisit {
     match obs {
         Observation::Event(event) => {
-            let mut events = vec![stamp_activation(event.as_ref().clone(), request)];
+            let stamped = stamp_activation(event.as_ref().clone(), request);
+            if !budget.try_take(&stamped) {
+                return ArmVisit::Deferred;
+            }
+            let mut events = vec![stamped];
             if let Some(bind) = bind {
-                drain_ready(observer, bind, request, &mut events);
+                drain_ready(observer, bind, request, budget, &mut events);
             }
             ArmVisit::Events(events)
         }
@@ -414,16 +585,22 @@ fn drain_ready<O: Observer>(
     observer: &O,
     bind: &O::Bind,
     request: &PollCycleRequest,
+    budget: &mut CollectBudget,
     events: &mut Vec<WaitEvent>,
 ) {
-    while let Some(obs) = observer.poll_ready(bind) {
+    while !budget.exhausted() {
+        let Some(obs) = observer.poll_ready(bind) else {
+            return;
+        };
         match obs {
             Observation::Event(event) => {
-                events.push(stamp_activation(*event, request));
+                let stamped = stamp_activation(*event, request);
+                if !budget.try_take(&stamped) {
+                    return;
+                }
+                events.push(stamped);
             }
-            Observation::Overflow => {
-                return;
-            }
+            Observation::Overflow => return,
             _ => return,
         }
     }
@@ -454,7 +631,7 @@ fn decide_at_deadline(
     now: &Timestamp,
     resolved: &[ResolvedStart],
     visits: &BTreeMap<usize, ArmVisit>,
-) -> PollCycleOutcome {
+) -> Result<PollCycleOutcome> {
     if !required_binding_complete(set, resolved) {
         return finish(
             set,
@@ -469,7 +646,7 @@ fn decide_at_deadline(
     let saw_events = visits
         .values()
         .any(|visit| matches!(visit, ArmVisit::Events(events) if !events.is_empty()));
-    for idx in 0..set.registrations.len() {
+    for idx in fairness_order(set, request) {
         visits.entry(idx).or_insert_with(|| {
             if saw_events {
                 ArmVisit::Deferred
@@ -488,18 +665,18 @@ fn finish(
     resolved: &[ResolvedStart],
     visits: &BTreeMap<usize, ArmVisit>,
     force_reason: Option<&str>,
-) -> PollCycleOutcome {
+) -> Result<PollCycleOutcome> {
     if let Some(reason) = force_reason {
         let kind = if reason == "consumer_cancelled" {
             OutcomeKind::Cancelled
         } else {
             OutcomeKind::Failed
         };
-        return apply_posture(
+        return Ok(apply_posture(
             set,
             request,
-            build(set, request, now, resolved, visits, kind, Some(reason)),
-        );
+            build(set, request, now, resolved, visits, kind, Some(reason))?,
+        ));
     }
     assemble(set, request, now, resolved, visits)
 }
@@ -510,9 +687,9 @@ fn assemble(
     now: Timestamp,
     resolved: &[ResolvedStart],
     visits: &BTreeMap<usize, ArmVisit>,
-) -> PollCycleOutcome {
-    let outcome = decide_kind(set, request, now, resolved, visits);
-    apply_posture(set, request, outcome)
+) -> Result<PollCycleOutcome> {
+    let outcome = decide_kind(set, request, now, resolved, visits)?;
+    Ok(apply_posture(set, request, outcome))
 }
 
 fn decide_kind(
@@ -521,13 +698,14 @@ fn decide_kind(
     now: Timestamp,
     resolved: &[ResolvedStart],
     visits: &BTreeMap<usize, ArmVisit>,
-) -> PollCycleOutcome {
+) -> Result<PollCycleOutcome> {
     let mut events = Vec::new();
     let mut overflow = false;
     let mut failed = None;
     let mut dirty = false;
     let mut deferred_required = false;
-    for (idx, registration) in set.registrations.iter().enumerate() {
+    for idx in fairness_order(set, request) {
+        let registration = &set.registrations[idx];
         match visits.get(&idx) {
             Some(ArmVisit::Events(found)) => events.extend(found.iter().cloned()),
             Some(ArmVisit::Overflow) => overflow = true,
@@ -548,9 +726,6 @@ fn decide_kind(
         }
     }
 
-    let uncapped = events.len();
-    events = cap_events(set, request, events);
-    let bounded = events.len() < uncapped;
     let at_logical = now >= request.logical_deadline;
 
     if overflow && events.is_empty() {
@@ -564,7 +739,7 @@ fn decide_kind(
             Some("buffer_overflow"),
         );
     }
-    if overflow || bounded {
+    if overflow {
         return build(
             set,
             request,
@@ -649,36 +824,6 @@ fn decide_kind(
     )
 }
 
-fn cap_events(
-    set: &RegistrationSet,
-    request: &PollCycleRequest,
-    events: Vec<WaitEvent>,
-) -> Vec<WaitEvent> {
-    let aggregate = request
-        .bound
-        .as_ref()
-        .and_then(|bound| bound.max_events)
-        .unwrap_or(set.aggregate_limits.max_events);
-    let mut kept = Vec::new();
-    let mut per_reg: BTreeMap<String, u64> = BTreeMap::new();
-    for event in events {
-        let rid = event.registration_id.as_str().to_string();
-        let count = per_reg.entry(rid.clone()).or_insert(0);
-        let reg_max = set
-            .registrations
-            .iter()
-            .find(|reg| reg.registration_id.as_str() == rid)
-            .map(|reg| reg.bounds.max_events)
-            .unwrap_or(u64::MAX);
-        if *count >= reg_max || kept.len() as u64 >= aggregate {
-            continue;
-        }
-        *count += 1;
-        kept.push(event);
-    }
-    kept
-}
-
 fn apply_posture(
     set: &RegistrationSet,
     request: &PollCycleRequest,
@@ -733,10 +878,11 @@ fn rebuild_reason(
         if arm.status == ArmStatus::Events {
             arm.status = ArmStatus::NoChange;
             arm.event_count = 0;
+            arm.byte_count = 0;
         }
     }
-    outcome.retained_events = empty_event_map(set);
-    let _ = request;
+    outcome.retained_events = empty_event_map(&outcome);
+    let _ = (set, request);
     outcome
 }
 
@@ -748,8 +894,7 @@ fn build(
     visits: &BTreeMap<usize, ArmVisit>,
     kind: OutcomeKind,
     reason_code: Option<&str>,
-) -> PollCycleOutcome {
-    let starts = start_map(set, request, resolved);
+) -> Result<PollCycleOutcome> {
     let mut events = Vec::new();
     let mut arms = Vec::new();
     let mut retained_through = BTreeMap::new();
@@ -757,12 +902,12 @@ fn build(
     let mut proposed_next_anchors = BTreeMap::new();
     let mut required_index = 0usize;
 
-    for (idx, registration) in set.registrations.iter().enumerate() {
+    for idx in 0..set.registrations.len() {
+        let registration = &set.registrations[idx];
         let arm_id = arm_id_for(request, registration, &mut required_index);
-        let start = starts
-            .get(registration.registration_id.as_str())
-            .cloned()
-            .unwrap_or_else(|| fallback_start(registration, request));
+        let Some(start) = honest_start(resolved, registration) else {
+            continue;
+        };
         let visit = visits.get(&idx);
         let (status, degraded, reason, arm_events) = visit_status(visit);
         let proposed = arm_events
@@ -788,6 +933,7 @@ fn build(
         if matches!(kind, OutcomeKind::Events | OutcomeKind::Partial) {
             events.extend(arm_events.iter().cloned());
         }
+        let byte_count = arm_events.iter().map(event_surface_bytes).sum();
         let mut arm = CoverageArm {
             arm_id,
             registration_id: registration.registration_id.clone(),
@@ -797,7 +943,7 @@ fn build(
             start_anchor: start.clone(),
             proposed_next_anchor: proposed.clone(),
             event_count: arm_events.len() as u64,
-            byte_count: 0,
+            byte_count,
             reason_code: None,
         };
         if let Some(code) = reason {
@@ -816,14 +962,9 @@ fn build(
         );
         proposed_next_anchors.insert(registration.registration_id.as_str().to_string(), proposed);
     }
-    events = cap_events(set, request, events);
-    for (rid, ids) in retained_events.iter_mut() {
-        ids.retain(|event_id| {
-            events.iter().any(|event| {
-                event.event_id.as_str() == event_id.as_str()
-                    && event.registration_id.as_str() == rid
-            })
-        });
+
+    if arms.is_empty() {
+        return Err(ValidationError::new("/arms", "unresolved_start").into());
     }
 
     if matches!(
@@ -838,9 +979,10 @@ fn build(
             if arm.status == ArmStatus::Events {
                 arm.status = ArmStatus::NoChange;
                 arm.event_count = 0;
+                arm.byte_count = 0;
             }
         }
-        retained_events = empty_event_map(set);
+        retained_events = empty_event_map_from_arms(&arms);
     }
 
     let coverage_complete = coverage_is_complete(request, &arms, kind);
@@ -850,7 +992,7 @@ fn build(
         Some(request.acknowledged_anchors.clone())
     };
 
-    PollCycleOutcome {
+    Ok(PollCycleOutcome {
         capabilities: request.capabilities.clone(),
         message_id: IdToken::new(format!("{}:outcome", request.message_id.as_str())),
         correlation_id: request.correlation_id.clone(),
@@ -876,7 +1018,7 @@ fn build(
         acknowledged_anchors: acknowledged,
         bound: request.bound.clone(),
         reason_code: reason_code.map(IdToken::new),
-    }
+    })
 }
 
 fn visit_status(visit: Option<&ArmVisit>) -> (ArmStatus, bool, Option<String>, Vec<WaitEvent>) {
@@ -933,52 +1075,11 @@ fn coverage_is_complete(
     })
 }
 
-fn start_map(
-    set: &RegistrationSet,
-    request: &PollCycleRequest,
-    resolved: &[ResolvedStart],
-) -> BTreeMap<String, Anchor> {
-    let mut starts = BTreeMap::new();
-    for registration in &set.registrations {
-        let rid = registration.registration_id.as_str();
-        if let Some(ack) = request.acknowledged_anchors.get(rid) {
-            starts.insert(rid.to_string(), ack.clone());
-            continue;
-        }
-        if let Some(found) = resolved
-            .iter()
-            .find(|item| item.registration_id.as_str() == rid)
-        {
-            starts.insert(rid.to_string(), found.start.clone());
-            continue;
-        }
-        if let Some(start) = &registration.start_anchor {
-            starts.insert(rid.to_string(), start.clone());
-        }
-    }
-    starts
-}
-
-fn fallback_start(registration: &Registration, request: &PollCycleRequest) -> Anchor {
-    if let Some(ack) = request
-        .acknowledged_anchors
-        .get(registration.registration_id.as_str())
-    {
-        return ack.clone();
-    }
-    if let Some(start) = &registration.start_anchor {
-        return start.clone();
-    }
-    let rest = registration
-        .registration_id
-        .as_str()
-        .strip_prefix("reg:")
-        .unwrap_or(registration.registration_id.as_str());
-    let local = if rest.len() > 58 { &rest[..58] } else { rest };
-    Anchor {
-        kind: waitprims_core::AnchorKind::ProviderOpaque,
-        value: IdToken::new(format!("anc:h-{local}")),
-    }
+fn honest_start(resolved: &[ResolvedStart], registration: &Registration) -> Option<Anchor> {
+    resolved
+        .iter()
+        .find(|item| item.registration_id.as_str() == registration.registration_id.as_str())
+        .map(|item| item.start.clone())
 }
 
 fn arm_id_for(
@@ -1048,9 +1149,16 @@ fn fairness_start_index(set: &RegistrationSet, request: &PollCycleRequest) -> us
     0
 }
 
-fn empty_event_map(set: &RegistrationSet) -> BTreeMap<String, Vec<IdToken>> {
-    set.registrations
+fn empty_event_map(outcome: &PollCycleOutcome) -> BTreeMap<String, Vec<IdToken>> {
+    outcome
+        .arms
         .iter()
-        .map(|reg| (reg.registration_id.as_str().to_string(), Vec::new()))
+        .map(|arm| (arm.registration_id.as_str().to_string(), Vec::new()))
+        .collect()
+}
+
+fn empty_event_map_from_arms(arms: &[CoverageArm]) -> BTreeMap<String, Vec<IdToken>> {
+    arms.iter()
+        .map(|arm| (arm.registration_id.as_str().to_string(), Vec::new()))
         .collect()
 }
