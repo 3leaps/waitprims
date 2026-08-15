@@ -12,12 +12,14 @@ mod clock;
 mod first_match;
 mod observer;
 mod outcome;
+mod poll_cycle;
 mod race;
 
 pub use cancel::Cancel;
 pub use clock::Clock;
 pub use first_match::{run_first_match, TIE_RULE};
 pub use observer::{BindHandle, Observation, Observer};
+pub use poll_cycle::run_poll_cycle;
 pub use waitprims_core::{Error, Result};
 
 #[cfg(test)]

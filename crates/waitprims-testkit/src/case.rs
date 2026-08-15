@@ -1,9 +1,12 @@
 //! Builders for sterile first-match cases.
 
+use std::collections::BTreeMap;
+
 use waitprims_core::{
     ActorRef, Anchor, AnchorKind, AuthnMode, BaselinePolicy, Canonicalization, CapabilityToken,
     ContentDigest, DigestAlgorithm, IdToken, JcsDigest, LiveWaitRequest, OpaqueRef, PayloadRef,
-    PredicateRef, Registration, RegistrationSet, ReplayStatus, Timestamp, WaitBound, WaitEvent,
+    PollCycleAck, PollCycleOutcome, PollCycleRequest, PredicateRef, Registration, RegistrationSet,
+    ReplayStatus, Timestamp, WaitBound, WaitEvent,
 };
 
 /// Parse a fixture timestamp.
@@ -88,6 +91,67 @@ pub fn registration_baseline(
         },
         start_anchor: None,
         baseline_policy: Some(BaselinePolicy::Latest),
+    }
+}
+
+/// Arm id assigned to a registration in poll-cycle fixtures.
+pub fn arm_id_for(registration: &Registration) -> IdToken {
+    let rest = registration
+        .registration_id
+        .as_str()
+        .strip_prefix("reg:")
+        .unwrap_or(registration.registration_id.as_str());
+    IdToken::new(format!("arm:{rest}"))
+}
+
+/// Poll-cycle request citing [`registration_set`].
+pub fn poll_cycle_request(set: &RegistrationSet) -> PollCycleRequest {
+    let required_arms = set
+        .registrations
+        .iter()
+        .filter(|registration| registration.required)
+        .map(arm_id_for)
+        .collect();
+    PollCycleRequest {
+        capabilities: vec![CapabilityToken::new("contract: agent-wait/v0")],
+        message_id: IdToken::new("msg:aw-poll-req-1"),
+        correlation_id: IdToken::new("corr:aw-1"),
+        created_at: ts("2026-08-15T16:01:00Z"),
+        actor_ref: ActorRef::new("seat:consumer-a"),
+        causation_id: Some(IdToken::new("msg:aw-reg-1")),
+        grant_ref: None,
+        verification_receipt_ref: None,
+        policy_decision_ref: None,
+        waiter_id: IdToken::new("waiter:seat-consumer-a"),
+        registration_set_ref: IdToken::new("msg:aw-reg-1"),
+        registration_revision: IdToken::new("regrev-1"),
+        logical_deadline: ts("2026-08-15T17:00:00Z"),
+        run_deadline: ts("2026-08-15T16:20:00Z"),
+        required_arms,
+        fairness_cursor: IdToken::new("fair:start"),
+        acknowledged_anchors: BTreeMap::new(),
+        activation_ref: OpaqueRef::new("act:cycle-1"),
+        cycle_id: IdToken::new("cycle:1"),
+        bound: None,
+    }
+}
+
+/// Commit the retained cursors and event ids from an admitted poll outcome.
+pub fn ack_poll_outcome(outcome: &PollCycleOutcome) -> PollCycleAck {
+    PollCycleAck {
+        capabilities: outcome.capabilities.clone(),
+        message_id: IdToken::new(format!("{}:ack", outcome.message_id.as_str())),
+        correlation_id: outcome.correlation_id.clone(),
+        created_at: outcome.completed_at.clone(),
+        actor_ref: outcome.actor_ref.clone(),
+        causation_id: Some(outcome.message_id.clone()),
+        grant_ref: outcome.grant_ref.clone(),
+        verification_receipt_ref: outcome.verification_receipt_ref.clone(),
+        policy_decision_ref: outcome.policy_decision_ref.clone(),
+        waiter_id: outcome.waiter_id.clone(),
+        outcome_ref: outcome.message_id.clone(),
+        committed_anchors: outcome.retained_through.clone(),
+        retained_events: outcome.retained_events.clone(),
     }
 }
 

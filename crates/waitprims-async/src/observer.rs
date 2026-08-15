@@ -36,6 +36,21 @@ pub enum Observation {
         /// Stable reason code for a `failed` outcome.
         reason_code: waitprims_core::IdToken,
     },
+    /// Provider outage on this arm. Not a clean `no_change` / `logical_deadman`.
+    Outage {
+        /// Stable reason code for the outage arm.
+        reason_code: waitprims_core::IdToken,
+    },
+    /// The exclusive cursor is uncertain. Not a clean complete.
+    CursorUncertain {
+        /// Stable reason code for the uncertain arm.
+        reason_code: waitprims_core::IdToken,
+    },
+    /// The arm is degraded. Not a clean `no_change` / `logical_deadman`.
+    Degraded {
+        /// Stable reason code for the degraded arm.
+        reason_code: waitprims_core::IdToken,
+    },
 }
 
 /// Observe registrations until the wait completes or the bind is dropped.

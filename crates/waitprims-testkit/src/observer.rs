@@ -5,16 +5,25 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use waitprims_async::{Observation, Observer};
-use waitprims_core::{Anchor, Registration, Result, Timestamp, WaitEvent};
+use waitprims_core::{Anchor, IdToken, Registration, Result, Timestamp, WaitEvent};
 
 use crate::bind::{resolve_start_at_bind, BindTracker, TrackedBind};
 use crate::clock::FakeClock;
 use crate::script::Script;
 
+#[derive(Clone)]
+enum ArmFault {
+    Outage(IdToken),
+    CursorUncertain(IdToken),
+    Degraded(IdToken),
+    Failed(IdToken),
+}
+
 struct Queues {
     buffer_limit: usize,
     events: Mutex<BTreeMap<String, VecDeque<WaitEvent>>>,
     overflowed: Mutex<BTreeSet<String>>,
+    faults: Mutex<BTreeMap<String, ArmFault>>,
 }
 
 /// Observer that emits scripted events at their `observed_at` times.
@@ -51,6 +60,7 @@ impl ScriptedObserver {
                 buffer_limit: script.buffer_limit.max(1),
                 events: Mutex::new(queued),
                 overflowed: Mutex::new(BTreeSet::new()),
+                faults: Mutex::new(BTreeMap::new()),
             }),
             clock,
             tracker: BindTracker::new(),
@@ -72,6 +82,62 @@ impl ScriptedObserver {
         self.hang_cancel.store(true, Ordering::Relaxed);
     }
 
+    /// Report provider outage on this registration.
+    pub fn outage(&self, registration_id: &str, reason_code: &str) {
+        self.set_fault(registration_id, ArmFault::Outage(IdToken::new(reason_code)));
+    }
+
+    /// Report an uncertain exclusive cursor on this registration.
+    pub fn cursor_uncertain(&self, registration_id: &str, reason_code: &str) {
+        self.set_fault(
+            registration_id,
+            ArmFault::CursorUncertain(IdToken::new(reason_code)),
+        );
+    }
+
+    /// Report a degraded required arm.
+    pub fn degrade(&self, registration_id: &str, reason_code: &str) {
+        self.set_fault(
+            registration_id,
+            ArmFault::Degraded(IdToken::new(reason_code)),
+        );
+    }
+
+    /// Report a failed arm without a usable event.
+    pub fn fail_arm(&self, registration_id: &str, reason_code: &str) {
+        self.set_fault(registration_id, ArmFault::Failed(IdToken::new(reason_code)));
+    }
+
+    fn set_fault(&self, registration_id: &str, fault: ArmFault) {
+        self.queues
+            .faults
+            .lock()
+            .expect("observer")
+            .insert(registration_id.to_string(), fault);
+    }
+
+    fn fault_observation(&self, registration_id: &str) -> Option<Observation> {
+        self.queues
+            .faults
+            .lock()
+            .expect("observer")
+            .get(registration_id)
+            .map(|fault| match fault {
+                ArmFault::Outage(reason) => Observation::Outage {
+                    reason_code: reason.clone(),
+                },
+                ArmFault::CursorUncertain(reason) => Observation::CursorUncertain {
+                    reason_code: reason.clone(),
+                },
+                ArmFault::Degraded(reason) => Observation::Degraded {
+                    reason_code: reason.clone(),
+                },
+                ArmFault::Failed(reason) => Observation::Failed {
+                    reason_code: reason.clone(),
+                },
+            })
+    }
+
     /// Binds that have not been released.
     pub fn live_bind_count(&self) -> usize {
         self.tracker.live_count()
@@ -83,6 +149,9 @@ impl ScriptedObserver {
     }
 
     fn take_due(&self, registration_id: &str) -> Option<Observation> {
+        if let Some(fault) = self.fault_observation(registration_id) {
+            return Some(fault);
+        }
         let now = self.clock.current_time();
         if self
             .queues
