@@ -1,0 +1,21 @@
+# Rust
+/target
+**/*.rs.bk
+*.pdb
+
+# Local planning and machine guidance (convenience filter only)
+/.plans/
+/AGENTS.local.md
+
+# Secrets
+/.env
+/.env.*
+
+# OS and editors
+.DS_Store
+.idea/
+.vscode/
+.cursor/
+*.swp
+*.swo
+*~
