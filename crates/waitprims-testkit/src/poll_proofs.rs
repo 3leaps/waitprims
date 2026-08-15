@@ -220,9 +220,14 @@ async fn idle_observer_honors_logical_deadline() {
     let observer = IdleObserver::new();
     let outcome = run_poll_cycle(&set, &request, &observer, &clock, &Cancel::new())
         .await
-        .expect("deadman");
+        .expect("idle snapshot");
     admit(&outcome);
-    assert_eq!(outcome.outcome_kind, OutcomeKind::LogicalDeadman);
+    assert_eq!(
+        outcome.outcome_kind,
+        OutcomeKind::NoChange,
+        "immediate idle is a clean snapshot before logical_deadline"
+    );
+    assert!(outcome.completed_at < request.logical_deadline);
     assert_eq!(observer.live_bind_count(), 0);
 }
 

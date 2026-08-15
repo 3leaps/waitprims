@@ -451,13 +451,10 @@ fn poll_scripted_cycle_exits_zero_with_poll_cycle_outcome() {
     let value: serde_json::Value =
         serde_json::from_str(stdout.trim()).expect("stdout must be JSON");
     assert_eq!(value["message_type"], "poll_cycle_outcome");
-    assert!(
-        matches!(
-            value["outcome_kind"].as_str(),
-            Some("events" | "partial" | "no_change" | "logical_deadman" | "coverage_degraded")
-        ),
-        "admitted poll outcome kind: {stdout}"
-    );
+    assert_eq!(value["outcome_kind"], "events");
+    assert_eq!(value["coverage_complete"], true);
+    assert_eq!(value["arms"].as_array().expect("arms").len(), 3);
+    assert_ne!(value["next_fairness_cursor"], value["fairness_cursor"]);
     assert!(value.get("arms").is_some(), "poll must emit arms: {stdout}");
     assert!(
         value.get("retained_through").is_some(),

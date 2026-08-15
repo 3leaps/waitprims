@@ -93,6 +93,14 @@ fn snapshot(resolved: &Mutex<Vec<ResolvedStart>>) -> Vec<ResolvedStart> {
     resolved.lock().expect("resolved-start").clone()
 }
 
+fn merge_starts(slots: &[ResolvedStart], resolved: &[ResolvedStart]) -> Vec<ResolvedStart> {
+    let mut by_id = BTreeMap::new();
+    for start in resolved.iter().chain(slots) {
+        by_id.insert(start.registration_id.as_str().to_string(), start.clone());
+    }
+    by_id.into_values().collect()
+}
+
 fn starts_from_slots<B: BindHandle>(binds: &[Option<B>]) -> Vec<ResolvedStart> {
     binds
         .iter()
@@ -208,11 +216,7 @@ where
                 Some("consumer_cancelled"),
             ));
         }
-        let starts = if any_bound {
-            starts_from_slots(&bound)
-        } else {
-            snapshot(&resolved)
-        };
+        let starts = merge_starts(&starts_from_slots(&bound), &snapshot(&resolved));
         if deadline_reached(request, &clock.now()) {
             return Ok(decide_at_deadline(
                 set,
