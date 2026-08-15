@@ -2,7 +2,9 @@
 //!
 //! Accepted: extended date/time with seconds and `Z`/`z` or a
 //! colon-separated numeric offset. Leap seconds are rejected, not clamped.
-//! Equivalent offsets compare as the same instant.
+//! Equivalent offsets compare as the same instant. Fractional seconds are
+//! padded and truncated to six digits for comparison, matching the pinned
+//! Crucible oracle.
 //!
 //! Construction and comparison go through [`Timestamp`]. The `time` crate
 //! is an implementation ingredient, not the public gate.
@@ -165,15 +167,19 @@ fn parse_instant(text: &str) -> Result<OffsetDateTime, ()> {
         if idx == start {
             return Err(());
         }
+        // Pinned oracle (crucible rfc3339-instant.py at f191295) pads and
+        // truncates the fraction to six digits (microseconds). Extra digits
+        // are discarded, not rounded.
         let digits = &text[start..idx];
         let mut padded = digits.to_string();
-        while padded.len() < 9 {
+        while padded.len() < 6 {
             padded.push('0');
         }
-        if padded.len() > 9 {
-            padded.truncate(9);
+        if padded.len() > 6 {
+            padded.truncate(6);
         }
-        nanosecond = padded.parse().map_err(|_| ())?;
+        let microsecond: u32 = padded.parse().map_err(|_| ())?;
+        nanosecond = microsecond.checked_mul(1000).ok_or(())?;
     }
 
     if idx >= bytes.len() {
@@ -312,5 +318,51 @@ mod tests {
         assert_eq!(z, offset);
         assert_eq!(z.as_str(), "2026-08-15T17:00:00Z");
         assert_eq!(offset.as_str(), "2026-08-15T17:00:00+00:00");
+    }
+
+    #[test]
+    fn seven_digit_fractions_compare_equal_after_six_digit_truncate() {
+        assert_eq!(
+            compare(
+                "2026-08-15T17:00:00.1234567Z",
+                "2026-08-15T17:00:00.1234568Z"
+            )
+            .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn fraction_compare_matches_pinned_six_digit_oracle() {
+        // Equal after pad/truncate to six digits.
+        assert_eq!(
+            compare("2026-08-15T17:00:00.123Z", "2026-08-15T17:00:00.123000Z").unwrap(),
+            0
+        );
+        assert_eq!(
+            compare(
+                "2026-08-15T17:00:00.1234569Z",
+                "2026-08-15T17:00:00.1234560Z"
+            )
+            .unwrap(),
+            0
+        );
+        // Unequal at the sixth digit.
+        assert_eq!(
+            compare("2026-08-15T17:00:00.123456Z", "2026-08-15T17:00:00.123457Z").unwrap(),
+            -1
+        );
+        assert_eq!(
+            compare(
+                "2026-08-15T17:00:00.1234559Z",
+                "2026-08-15T17:00:00.1234560Z"
+            )
+            .unwrap(),
+            -1
+        );
+        assert_eq!(
+            compare("2026-08-15T17:00:00.100Z", "2026-08-15T17:00:00Z").unwrap(),
+            1
+        );
     }
 }

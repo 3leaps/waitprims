@@ -49,6 +49,18 @@ fn rejects_leap_seconds_without_clamping() {
 }
 
 #[test]
+fn seven_digit_fractions_are_equal_at_six_digit_precision() {
+    assert_eq!(
+        compare(
+            "2026-08-15T17:00:00.1234567Z",
+            "2026-08-15T17:00:00.1234568Z"
+        )
+        .unwrap(),
+        0
+    );
+}
+
+#[test]
 fn equivalent_offsets_compare_equal() {
     assert_eq!(
         compare("2026-08-15T17:00:00Z", "2026-08-15T17:00:00+00:00").unwrap(),
