@@ -6,6 +6,7 @@
 //! the winner is the arm that appears first in
 //! `registration_set.registrations`. That order is the only tie break.
 
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use waitprims_core::{
@@ -15,8 +16,8 @@ use waitprims_core::{
 
 use crate::cancel::Cancel;
 use crate::clock::Clock;
-use crate::observer::{Observation, Observer};
-use crate::outcome;
+use crate::observer::{BindHandle, Observation, Observer};
+use crate::outcome::{self, ResolvedStart};
 use crate::race::{bound_observation_is_terminal, observation_is_terminal, FirstReady};
 
 /// Documented deterministic tie rule for same-instant accepted observations.
@@ -28,7 +29,10 @@ const BACKOFF_MS: &[u64] = &[50, 100, 200, 400, 800, 1000];
 /// Resolve the cited registration set/revision and first-match an observer.
 ///
 /// Bind, next, cancel, and both deadlines share one race. Binding is not a
-/// serial preamble. Emits a `live_wait_outcome` body. Callers serialize
+/// serial preamble. A `baseline_policy` start is resolved to an exclusive
+/// provider cursor at bind and kept for coverage. After a decision the
+/// runner drops binds; it does not await [`Observer::cancel`]. Emits a
+/// `live_wait_outcome` body. Callers serialize
 /// [`waitprims_core::AgentWaitMessage::LiveWaitOutcome`] for the wire.
 pub async fn run_first_match<O, C>(
     set: &RegistrationSet,
@@ -61,16 +65,40 @@ fn resolve(set: &RegistrationSet, request: &LiveWaitRequest) -> Result<()> {
 async fn bind_then_observe<O: Observer>(
     observer: &O,
     registration: &Registration,
+    resolved: &Mutex<Vec<ResolvedStart>>,
 ) -> Result<(O::Bind, Observation)> {
     let bind = observer.bind(registration).await?;
+    record_resolved(resolved, &bind);
     let observation = observer.next(&bind).await?;
     Ok((bind, observation))
 }
 
-async fn release<O: Observer>(observer: &O, binds: &[O::Bind]) {
-    for bind in binds {
-        let _ = observer.cancel(bind).await;
+fn record_resolved<B: BindHandle>(resolved: &Mutex<Vec<ResolvedStart>>, bind: &B) {
+    if let Some(start) = bind.resolved_start() {
+        resolved
+            .lock()
+            .expect("resolved-start")
+            .push(ResolvedStart {
+                registration_id: bind.registration_id().clone(),
+                start: start.clone(),
+            });
     }
+}
+
+fn snapshot(resolved: &Mutex<Vec<ResolvedStart>>) -> Vec<ResolvedStart> {
+    resolved.lock().expect("resolved-start").clone()
+}
+
+fn starts_from_binds<B: BindHandle>(binds: &[B]) -> Vec<ResolvedStart> {
+    binds
+        .iter()
+        .filter_map(|bind| {
+            bind.resolved_start().map(|start| ResolvedStart {
+                registration_id: bind.registration_id().clone(),
+                start: start.clone(),
+            })
+        })
+        .collect()
 }
 
 async fn run_loop<O, C>(
@@ -86,11 +114,9 @@ where
 {
     let mut backoff_step = 0usize;
     let mut bound: Option<Vec<O::Bind>> = None;
+    let resolved = Arc::new(Mutex::new(Vec::<ResolvedStart>::new()));
     loop {
         if cancel.is_cancelled() {
-            if let Some(binds) = bound.as_ref() {
-                release(observer, binds).await;
-            }
             return Ok(finish(
                 set,
                 request,
@@ -98,15 +124,17 @@ where
                 outcome::cancelled(request, clock.now()),
             ));
         }
-        if let Some(done) = terminal_deadline(set, request, &clock.now()) {
-            if let Some(binds) = bound.as_ref() {
-                release(observer, binds).await;
-            }
+        let starts = bound
+            .as_ref()
+            .map(|binds| starts_from_binds(binds))
+            .unwrap_or_else(|| snapshot(&resolved));
+        if let Some(done) = terminal_deadline(set, request, &clock.now(), &starts) {
             return Ok(finish(set, request, clock.now(), done));
         }
 
         let wait_until = earliest_deadline(request);
         if let Some(binds) = bound.as_ref() {
+            let starts = starts_from_binds(binds);
             tokio::select! {
                 biased;
                 ready = FirstReady::new(
@@ -115,14 +143,12 @@ where
                 ) => {
                     let mut ready = ready?;
                     extend_ready(observer, binds, &mut ready);
-                    if let Some(outcome) = decide(set, request, &clock.now(), &ready) {
-                        release(observer, binds).await;
+                    if let Some(outcome) = decide(set, request, &clock.now(), &ready, &starts) {
                         return Ok(finish(set, request, clock.now(), outcome));
                     }
                     backoff_step = backoff_step.saturating_add(1);
                     sleep_backoff(clock, cancel, request, backoff_step).await;
                     if cancel.is_cancelled() {
-                        release(observer, binds).await;
                         return Ok(finish(
                             set,
                             request,
@@ -132,7 +158,6 @@ where
                     }
                 }
                 _ = cancel.cancelled() => {
-                    release(observer, binds).await;
                     return Ok(finish(
                         set,
                         request,
@@ -144,12 +169,10 @@ where
                     let now = clock.now();
                     let mut ready = Vec::new();
                     extend_ready(observer, binds, &mut ready);
-                    if let Some(outcome) = decide(set, request, &now, &ready) {
-                        release(observer, binds).await;
+                    if let Some(outcome) = decide(set, request, &now, &ready, &starts) {
                         return Ok(finish(set, request, now, outcome));
                     }
-                    if let Some(done) = terminal_deadline(set, request, &now) {
-                        release(observer, binds).await;
+                    if let Some(done) = terminal_deadline(set, request, &now, &starts) {
                         return Ok(finish(set, request, now, done));
                     }
                 }
@@ -162,7 +185,10 @@ where
             ready = FirstReady::new(
                 set.registrations
                     .iter()
-                    .map(|registration| bind_then_observe(observer, registration)),
+                    .map(|registration| {
+                        let resolved = Arc::clone(&resolved);
+                        async move { bind_then_observe(observer, registration, &resolved).await }
+                    }),
                 bound_observation_is_terminal,
             ) => {
                 let ready = ready?;
@@ -173,14 +199,12 @@ where
                     indexed_binds.push((idx, bind));
                 }
                 extend_ready_at(observer, &indexed_binds, &mut observations);
-                if let Some(outcome) = decide(set, request, &clock.now(), &observations) {
-                    let held: Vec<O::Bind> =
-                        indexed_binds.into_iter().map(|(_, bind)| bind).collect();
-                    release(observer, &held).await;
-                    return Ok(finish(set, request, clock.now(), outcome));
-                }
                 indexed_binds.sort_by_key(|(idx, _)| *idx);
                 let held: Vec<O::Bind> = indexed_binds.into_iter().map(|(_, bind)| bind).collect();
+                let starts = starts_from_binds(&held);
+                if let Some(outcome) = decide(set, request, &clock.now(), &observations, &starts) {
+                    return Ok(finish(set, request, clock.now(), outcome));
+                }
                 bound = Some(held);
                 backoff_step = backoff_step.saturating_add(1);
                 sleep_backoff(clock, cancel, request, backoff_step).await;
@@ -195,7 +219,8 @@ where
             }
             _ = clock.sleep_until(wait_until) => {
                 let now = clock.now();
-                if let Some(done) = terminal_deadline(set, request, &now) {
+                let starts = snapshot(&resolved);
+                if let Some(done) = terminal_deadline(set, request, &now, &starts) {
                     return Ok(finish(set, request, now, done));
                 }
             }
@@ -255,6 +280,7 @@ fn decide(
     request: &LiveWaitRequest,
     now: &Timestamp,
     ready: &[(usize, Observation)],
+    resolved: &[ResolvedStart],
 ) -> Option<LiveWaitOutcome> {
     let mut events = Vec::new();
     let mut overflow = false;
@@ -274,7 +300,7 @@ fn decide(
             .min_by_key(|(idx, _)| *idx)
             .map(|(_, event)| event);
         return Some(if winner.is_some() {
-            outcome::partial(set, request, now.clone(), winner)
+            outcome::partial(set, request, now.clone(), winner, resolved)
         } else {
             outcome::failed(request, now.clone(), "buffer_overflow")
         });
@@ -294,12 +320,18 @@ fn terminal_deadline(
     set: &RegistrationSet,
     request: &LiveWaitRequest,
     now: &Timestamp,
+    resolved: &[ResolvedStart],
 ) -> Option<LiveWaitOutcome> {
     if now >= &request.logical_deadline {
-        return Some(outcome::logical_deadman(set, request, now.clone()));
+        return Some(outcome::logical_deadman(
+            set,
+            request,
+            now.clone(),
+            resolved,
+        ));
     }
     if now >= &request.run_deadline {
-        return Some(outcome::no_change(set, request, now.clone()));
+        return Some(outcome::no_change(set, request, now.clone(), resolved));
     }
     None
 }

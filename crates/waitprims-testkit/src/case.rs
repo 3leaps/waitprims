@@ -1,9 +1,9 @@
 //! Builders for sterile first-match cases.
 
 use waitprims_core::{
-    ActorRef, Anchor, AnchorKind, AuthnMode, Canonicalization, CapabilityToken, ContentDigest,
-    DigestAlgorithm, IdToken, JcsDigest, LiveWaitRequest, OpaqueRef, PayloadRef, PredicateRef,
-    Registration, RegistrationSet, ReplayStatus, Timestamp, WaitBound, WaitEvent,
+    ActorRef, Anchor, AnchorKind, AuthnMode, BaselinePolicy, Canonicalization, CapabilityToken,
+    ContentDigest, DigestAlgorithm, IdToken, JcsDigest, LiveWaitRequest, OpaqueRef, PayloadRef,
+    PredicateRef, Registration, RegistrationSet, ReplayStatus, Timestamp, WaitBound, WaitEvent,
 };
 
 /// Parse a fixture timestamp.
@@ -63,6 +63,31 @@ pub fn registration(registration_id: &str, method_id: &str, subject_id: &str) ->
             value: IdToken::new("anc:cursor-0"),
         }),
         baseline_policy: None,
+    }
+}
+
+/// One required registration that starts from `baseline_policy=latest`.
+pub fn registration_baseline(
+    registration_id: &str,
+    method_id: &str,
+    subject_id: &str,
+) -> Registration {
+    Registration {
+        registration_id: IdToken::new(registration_id),
+        method_id: IdToken::new(method_id),
+        subject_kind: IdToken::new("subject"),
+        subject_id: IdToken::new(subject_id),
+        required: true,
+        source_instance_ref: OpaqueRef::new("source:provider-a"),
+        predicate_ref: PredicateRef::new("pred:match"),
+        capability_ref: OpaqueRef::new("cap:wait"),
+        lease_expires_at: ts("2026-08-16T00:00:00Z"),
+        bounds: WaitBound {
+            max_events: 50,
+            max_bytes: 524_288,
+        },
+        start_anchor: None,
+        baseline_policy: Some(BaselinePolicy::Latest),
     }
 }
 

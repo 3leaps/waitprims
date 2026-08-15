@@ -3,7 +3,8 @@
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
-use waitprims_core::IdToken;
+use waitprims_async::BindHandle;
+use waitprims_core::{Anchor, AnchorKind, IdToken, Registration};
 
 /// Shared live/cancelled registration set.
 #[derive(Clone, Default)]
@@ -60,6 +61,8 @@ impl BindTracker {
 pub struct TrackedBind {
     /// Registration this bind observes.
     pub registration_id: IdToken,
+    /// Exclusive start cursor resolved at bind. Never a policy label.
+    pub resolved_start: Anchor,
     /// Held so [`BindInner::drop`] releases the tracker when the last clone goes away.
     #[allow(dead_code)]
     inner: Arc<BindInner>,
@@ -71,17 +74,55 @@ struct BindInner {
 }
 
 impl TrackedBind {
-    /// Track a new bind.
-    pub fn new(registration_id: IdToken, tracker: BindTracker) -> Self {
+    /// Track a new bind with the exclusive start cursor resolved at bind.
+    pub fn new(registration_id: IdToken, resolved_start: Anchor, tracker: BindTracker) -> Self {
         let id = registration_id.as_str().to_string();
         Self {
             registration_id,
+            resolved_start,
             inner: Arc::new(BindInner {
                 registration_id: id,
                 tracker,
             }),
         }
     }
+}
+
+impl BindHandle for TrackedBind {
+    fn registration_id(&self) -> &IdToken {
+        &self.registration_id
+    }
+
+    fn resolved_start(&self) -> Option<&Anchor> {
+        Some(&self.resolved_start)
+    }
+}
+
+/// Exclusive provider head assigned when a registration cites `baseline_policy`.
+///
+/// Derived from the registration id. Not a policy label such as
+/// `anc:baseline-latest`.
+pub fn exclusive_head_anchor(registration_id: &IdToken) -> Anchor {
+    let rest = registration_id
+        .as_str()
+        .strip_prefix("reg:")
+        .unwrap_or(registration_id.as_str());
+    let local = if rest.len() > 58 { &rest[..58] } else { rest };
+    Anchor {
+        kind: AnchorKind::ProviderOpaque,
+        value: IdToken::new(format!("anc:h-{local}")),
+    }
+}
+
+/// Resolve the exclusive start cursor at bind.
+///
+/// An explicit `start_anchor` is kept. A `baseline_policy` becomes the
+/// scripted head when one exists, otherwise [`exclusive_head_anchor`].
+pub fn resolve_start_at_bind(registration: &Registration, script_head: Option<Anchor>) -> Anchor {
+    if let Some(start) = &registration.start_anchor {
+        return start.clone();
+    }
+    script_head.unwrap_or_else(|| exclusive_head_anchor(&registration.registration_id))
 }
 
 impl Drop for BindInner {

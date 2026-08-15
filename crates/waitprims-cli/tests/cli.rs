@@ -326,6 +326,22 @@ fn wait_empty_script_is_no_change_at_run_deadline() {
     assert_eq!(value["outcome_kind"], "no_change");
     assert_eq!(value["completed_at"], "2026-08-15T16:20:00Z");
     assert_eq!(value["logical_deadline"], "2026-08-15T17:00:00Z");
+    assert_eq!(value["coverage_complete"], true);
+    let arms = value["arms"].as_array().expect("arms");
+    assert_eq!(arms.len(), 3, "baseline-policy arms must not be dropped");
+    for arm in arms {
+        assert_eq!(arm["status"], "no_change");
+        let start = arm["start_anchor"]["value"].as_str().expect("start");
+        assert_ne!(start, "anc:baseline-latest");
+        assert!(
+            !start.contains("baseline"),
+            "must not mint a policy label as a cursor: {start}"
+        );
+    }
+    assert!(
+        !stdout.contains("anc:baseline-latest"),
+        "must not fabricate a policy cursor: {stdout}"
+    );
 }
 
 #[test]

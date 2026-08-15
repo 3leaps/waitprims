@@ -1,9 +1,18 @@
 //! Build admitted `live_wait_outcome` values from a first-match decision.
 
+use std::collections::HashMap;
+
 use waitprims_core::{
-    ArmStatus, CoverageArm, IdToken, LiveWaitOutcome, LiveWaitRequest, OutcomeKind, Registration,
-    RegistrationSet, Timestamp, WaitEvent,
+    Anchor, ArmStatus, CoverageArm, IdToken, LiveWaitOutcome, LiveWaitRequest, OutcomeKind,
+    Registration, RegistrationSet, Timestamp, WaitEvent,
 };
+
+/// Exclusive start cursor resolved at bind for one registration.
+#[derive(Debug, Clone)]
+pub(crate) struct ResolvedStart {
+    pub registration_id: IdToken,
+    pub start: Anchor,
+}
 
 fn arm_id(registration: &Registration) -> IdToken {
     IdToken::new(format!("arm:{}", registration.registration_id.as_str()))
@@ -13,9 +22,11 @@ fn coverage_arm(
     registration: &Registration,
     status: ArmStatus,
     event: Option<&WaitEvent>,
+    resolved_start: Option<&Anchor>,
 ) -> Option<CoverageArm> {
     let start = event
         .map(|ev| ev.start_anchor.clone())
+        .or_else(|| resolved_start.cloned())
         .or_else(|| registration.start_anchor.clone())?;
     let proposed = event
         .map(|ev| ev.proposed_next_anchor.clone())
@@ -58,10 +69,21 @@ fn base(request: &LiveWaitRequest, completed_at: Timestamp, kind: OutcomeKind) -
     }
 }
 
-fn clean_arms(set: &RegistrationSet) -> Vec<CoverageArm> {
+fn start_map(resolved: &[ResolvedStart]) -> HashMap<&str, &Anchor> {
+    resolved
+        .iter()
+        .map(|item| (item.registration_id.as_str(), &item.start))
+        .collect()
+}
+
+fn clean_arms(set: &RegistrationSet, resolved: &[ResolvedStart]) -> Vec<CoverageArm> {
+    let starts = start_map(resolved);
     set.registrations
         .iter()
-        .filter_map(|reg| coverage_arm(reg, ArmStatus::NoChange, None))
+        .filter_map(|reg| {
+            let start = starts.get(reg.registration_id.as_str()).copied();
+            coverage_arm(reg, ArmStatus::NoChange, None, start)
+        })
         .collect()
 }
 
@@ -82,22 +104,25 @@ pub(crate) fn partial(
     request: &LiveWaitRequest,
     completed_at: Timestamp,
     event: Option<WaitEvent>,
+    resolved: &[ResolvedStart],
 ) -> LiveWaitOutcome {
     let proposed = event.as_ref().map(|ev| ev.proposed_next_anchor.clone());
     let winner_id = event
         .as_ref()
         .map(|ev| ev.registration_id.as_str().to_string());
+    let starts = start_map(resolved);
     let arms: Vec<CoverageArm> = set
         .registrations
         .iter()
         .filter_map(|reg| {
+            let start = starts.get(reg.registration_id.as_str()).copied();
             let is_winner = winner_id
                 .as_deref()
                 .is_some_and(|id| id == reg.registration_id.as_str());
             if is_winner {
-                coverage_arm(reg, ArmStatus::Events, event.as_ref())
+                coverage_arm(reg, ArmStatus::Events, event.as_ref(), start)
             } else {
-                coverage_arm(reg, ArmStatus::Deferred, None)
+                coverage_arm(reg, ArmStatus::Deferred, None, start)
             }
         })
         .collect();
@@ -113,12 +138,13 @@ pub(crate) fn logical_deadman(
     set: &RegistrationSet,
     request: &LiveWaitRequest,
     completed_at: Timestamp,
+    resolved: &[ResolvedStart],
 ) -> LiveWaitOutcome {
     let mut outcome = base(request, completed_at, OutcomeKind::LogicalDeadman);
     outcome.events = Some(Vec::new());
     outcome.logical_deadline = Some(request.logical_deadline.clone());
     outcome.coverage_complete = Some(true);
-    outcome.arms = Some(clean_arms(set));
+    outcome.arms = Some(clean_arms(set, resolved));
     outcome
 }
 
@@ -126,12 +152,13 @@ pub(crate) fn no_change(
     set: &RegistrationSet,
     request: &LiveWaitRequest,
     completed_at: Timestamp,
+    resolved: &[ResolvedStart],
 ) -> LiveWaitOutcome {
     let mut outcome = base(request, completed_at, OutcomeKind::NoChange);
     outcome.events = Some(Vec::new());
     outcome.logical_deadline = Some(request.logical_deadline.clone());
     outcome.coverage_complete = Some(true);
-    outcome.arms = Some(clean_arms(set));
+    outcome.arms = Some(clean_arms(set, resolved));
     outcome
 }
 

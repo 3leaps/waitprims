@@ -14,10 +14,7 @@
       "method_id": "chanvoy_wait",
       "subject_kind": "inbox",
       "subject_id": "inbox:seat-a",
-      "start_anchor": {
-        "kind": "provider_opaque",
-        "value": "anc:cursor-0"
-      },
+      "baseline_policy": "latest",
       "required": true,
       "source_instance_ref": "source:provider-a",
       "predicate_ref": "pred:chanvoy-wait",
@@ -33,10 +30,7 @@
       "method_id": "sms_inbound",
       "subject_kind": "inbox",
       "subject_id": "inbox:sms-1",
-      "start_anchor": {
-        "kind": "provider_opaque",
-        "value": "anc:cursor-0"
-      },
+      "baseline_policy": "latest",
       "required": true,
       "source_instance_ref": "source:provider-a",
       "predicate_ref": "pred:sms-inbound",
@@ -52,10 +46,7 @@
       "method_id": "job_complete",
       "subject_kind": "service_job",
       "subject_id": "job:transcribe-1",
-      "start_anchor": {
-        "kind": "provider_opaque",
-        "value": "anc:cursor-0"
-      },
+      "baseline_policy": "latest",
       "required": true,
       "source_instance_ref": "source:provider-a",
       "predicate_ref": "pred:job-complete",
@@ -77,6 +68,6 @@
   "registration_digest": {
     "canonicalization": "rfc8785",
     "algorithm": "sha256",
-    "value": "8d3629166179cdec740c77e6395a840d3f842bbf72a93b19348fe92fdcccc034"
+    "value": "5ff9fd3567e97381699f02ef5f80a0c4a344e341bea8130fe9973e757e1a9086"
   }
 }

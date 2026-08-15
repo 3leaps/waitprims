@@ -4,8 +4,8 @@ use waitprims_async::{run_first_match, Cancel, TIE_RULE};
 use waitprims_core::{validate_message, AgentWaitMessage, LiveWaitOutcome, OutcomeKind, Timestamp};
 
 use crate::{
-    live_wait_request, registration, registration_set, ts, wait_event, FakeClock, IdleObserver,
-    Script, ScriptedObserver,
+    exclusive_head_anchor, live_wait_request, registration, registration_baseline,
+    registration_set, ts, wait_event, FakeClock, IdleObserver, Script, ScriptedObserver,
 };
 
 fn admit(outcome: &LiveWaitOutcome) {
@@ -42,6 +42,29 @@ fn three_arm_set() -> waitprims_core::RegistrationSet {
         registration("reg:sms-1", "sms_inbound", "sms:inbox-1"),
         registration("reg:job-1", "job_complete", "job:transcribe-1"),
     ])
+}
+
+fn three_arm_baseline_set() -> waitprims_core::RegistrationSet {
+    registration_set(vec![
+        registration_baseline("reg:chanvoy-1", "chanvoy_wait", "chan:seat-a"),
+        registration_baseline("reg:sms-1", "sms_inbound", "sms:inbox-1"),
+        registration_baseline("reg:job-1", "job_complete", "job:transcribe-1"),
+    ])
+}
+
+fn assert_clean_coverage(outcome: &LiveWaitOutcome, expected: &[(&str, &str)]) {
+    let arms = outcome.arms.as_ref().expect("coverage arms");
+    assert_eq!(arms.len(), expected.len(), "must keep every bound arm");
+    for (arm, (reg, start)) in arms.iter().zip(expected) {
+        assert_eq!(arm.registration_id.as_str(), *reg);
+        assert_eq!(arm.start_anchor.value.as_str(), *start);
+        assert_ne!(arm.start_anchor.value.as_str(), "anc:baseline-latest");
+    }
+    let json = serde_json::to_string(outcome).expect("serialize");
+    assert!(
+        !json.contains("anc:baseline-latest"),
+        "must not mint a policy label as a cursor: {json}"
+    );
 }
 
 #[tokio::test]
@@ -316,6 +339,95 @@ async fn empty_pending_observer_honors_run_deadline_as_no_change() {
             .map(str::to_string),
         Some("2026-08-15T17:00:00Z".to_string())
     );
+    assert_eq!(observer.live_bind_count(), 0);
+    assert_clean_coverage(
+        &outcome,
+        &[
+            ("reg:chanvoy-1", "anc:cursor-0"),
+            ("reg:sms-1", "anc:cursor-0"),
+            ("reg:job-1", "anc:cursor-0"),
+        ],
+    );
+}
+
+#[tokio::test]
+async fn baseline_policy_empty_wait_is_admitted_no_change() {
+    let set = three_arm_baseline_set();
+    let request = live_wait_request();
+    let clock = FakeClock::auto(request.created_at.clone());
+    let observer = ScriptedObserver::new(Script::default(), clock.clone());
+    let outcome = run_first_match(&set, &request, &observer, &clock, &Cancel::new())
+        .await
+        .expect("no_change");
+    admit(&outcome);
+    assert_eq!(outcome.outcome_kind, OutcomeKind::NoChange);
+    assert_eq!(outcome.completed_at, ts("2026-08-15T16:20:00Z"));
+    assert_eq!(observer.live_bind_count(), 0);
+    assert_eq!(
+        exclusive_head_anchor(&set.registrations[0].registration_id)
+            .value
+            .as_str(),
+        "anc:h-chanvoy-1"
+    );
+    assert_clean_coverage(
+        &outcome,
+        &[
+            ("reg:chanvoy-1", "anc:h-chanvoy-1"),
+            ("reg:sms-1", "anc:h-sms-1"),
+            ("reg:job-1", "anc:h-job-1"),
+        ],
+    );
+}
+
+#[tokio::test]
+async fn baseline_policy_idle_wait_is_admitted_logical_deadman() {
+    let set = three_arm_baseline_set();
+    let mut request = live_wait_request();
+    request.logical_deadline = ts("2026-08-15T16:02:00Z");
+    request.run_deadline = request.logical_deadline.clone();
+    let clock = FakeClock::auto(request.created_at.clone());
+    let observer = IdleObserver::new();
+    let outcome = run_first_match(&set, &request, &observer, &clock, &Cancel::new())
+        .await
+        .expect("deadman");
+    admit(&outcome);
+    assert_eq!(outcome.outcome_kind, OutcomeKind::LogicalDeadman);
+    assert_eq!(observer.live_bind_count(), 0);
+    assert_clean_coverage(
+        &outcome,
+        &[
+            ("reg:chanvoy-1", "anc:h-chanvoy-1"),
+            ("reg:sms-1", "anc:h-sms-1"),
+            ("reg:job-1", "anc:h-job-1"),
+        ],
+    );
+}
+
+#[tokio::test]
+async fn hanging_cancel_does_not_delay_decided_outcome() {
+    let set = two_arm_set();
+    let request = live_wait_request();
+    let script = Script {
+        buffer_limit: 8,
+        events: vec![wait_event(
+            "reg:sms-1",
+            "sms_inbound",
+            "evt:sms-1",
+            "2026-08-15T16:05:00Z",
+        )],
+    };
+    let clock = FakeClock::auto(request.created_at.clone());
+    let observer = ScriptedObserver::new(script, clock.clone());
+    observer.hang_cancel();
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        run_first_match(&set, &request, &observer, &clock, &Cancel::new()),
+    )
+    .await
+    .expect("hung cancel must not delay a decided outcome")
+    .expect("runner");
+    admit(&outcome);
+    assert_eq!(outcome.outcome_kind, OutcomeKind::Events);
     assert_eq!(observer.live_bind_count(), 0);
 }
 

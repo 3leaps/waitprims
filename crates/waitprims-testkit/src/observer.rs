@@ -1,12 +1,13 @@
 //! Scripted and idle observers.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use waitprims_async::{Observation, Observer};
-use waitprims_core::{Registration, Result, Timestamp, WaitEvent};
+use waitprims_core::{Anchor, Registration, Result, Timestamp, WaitEvent};
 
-use crate::bind::{BindTracker, TrackedBind};
+use crate::bind::{resolve_start_at_bind, BindTracker, TrackedBind};
 use crate::clock::FakeClock;
 use crate::script::Script;
 
@@ -23,6 +24,7 @@ pub struct ScriptedObserver {
     clock: FakeClock,
     tracker: BindTracker,
     hang_binds: Arc<Mutex<BTreeSet<String>>>,
+    hang_cancel: Arc<AtomicBool>,
 }
 
 impl ScriptedObserver {
@@ -53,6 +55,7 @@ impl ScriptedObserver {
             clock,
             tracker: BindTracker::new(),
             hang_binds: Arc::new(Mutex::new(BTreeSet::new())),
+            hang_cancel: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -62,6 +65,11 @@ impl ScriptedObserver {
             .lock()
             .expect("observer")
             .insert(registration_id.to_string());
+    }
+
+    /// Leave `cancel()` pending forever. Drop remains the release guarantee.
+    pub fn hang_cancel(&self) {
+        self.hang_cancel.store(true, Ordering::Relaxed);
     }
 
     /// Binds that have not been released.
@@ -115,6 +123,15 @@ impl ScriptedObserver {
             .get(registration_id)
             .and_then(|queue| queue.front().map(|event| event.observed_at.clone()))
     }
+
+    fn script_head(&self, registration_id: &str) -> Option<Anchor> {
+        self.queues
+            .events
+            .lock()
+            .expect("observer")
+            .get(registration_id)
+            .and_then(|queue| queue.front().map(|event| event.start_anchor.clone()))
+    }
 }
 
 impl Observer for ScriptedObserver {
@@ -130,8 +147,10 @@ impl Observer for ScriptedObserver {
             std::future::pending::<()>().await;
         }
         self.tracker.acquire(registration.registration_id.as_str());
+        let script_head = self.script_head(registration.registration_id.as_str());
         Ok(TrackedBind::new(
             registration.registration_id.clone(),
+            resolve_start_at_bind(registration, script_head),
             self.tracker.clone(),
         ))
     }
@@ -150,6 +169,9 @@ impl Observer for ScriptedObserver {
     }
 
     async fn cancel(&self, bind: &Self::Bind) -> Result<()> {
+        if self.hang_cancel.load(Ordering::Relaxed) {
+            std::future::pending::<()>().await;
+        }
         self.tracker.cancel(bind.registration_id.as_str());
         Ok(())
     }
@@ -189,6 +211,7 @@ impl Observer for IdleObserver {
         self.tracker.acquire(registration.registration_id.as_str());
         Ok(TrackedBind::new(
             registration.registration_id.clone(),
+            resolve_start_at_bind(registration, None),
             self.tracker.clone(),
         ))
     }

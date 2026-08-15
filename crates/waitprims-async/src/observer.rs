@@ -4,7 +4,20 @@
 
 use std::future::Future;
 
-use waitprims_core::{Registration, Result, WaitEvent};
+use waitprims_core::{Anchor, IdToken, Registration, Result, WaitEvent};
+
+/// Handle returned by [`Observer::bind`].
+///
+/// Dropping the handle is the release guarantee. `resolved_start` is the
+/// exclusive provider cursor assigned at bind — including when the
+/// registration cited `baseline_policy` rather than a cursor.
+pub trait BindHandle: Send + Sync + Unpin {
+    /// Registration this bind observes.
+    fn registration_id(&self) -> &IdToken;
+
+    /// Exclusive start cursor resolved at bind. Never a policy label.
+    fn resolved_start(&self) -> Option<&Anchor>;
+}
 
 /// One observation from a bound registration.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,9 +38,10 @@ pub enum Observation {
 /// Observe registrations until the wait completes or the bind is dropped.
 ///
 /// Shape is not frozen; bind / next / cancel is the required seam.
+/// [`Self::Bind`] must expose the exclusive start cursor resolved at bind.
 pub trait Observer: Send + Sync {
     /// Handle returned by [`Self::bind`]. Dropping it must release the bind.
-    type Bind: Send + Sync + Unpin;
+    type Bind: BindHandle;
 
     /// Bind one registration. Failure prevents a valid outcome.
     fn bind(&self, registration: &Registration) -> impl Future<Output = Result<Self::Bind>> + Send;
@@ -35,7 +49,11 @@ pub trait Observer: Send + Sync {
     /// Wait for the next observation on a bind.
     fn next(&self, bind: &Self::Bind) -> impl Future<Output = Result<Observation>> + Send;
 
-    /// Release a bind. Must be idempotent.
+    /// Best-effort explicit release. Must be idempotent.
+    ///
+    /// The first-match runner does not await this after a decision. A hung
+    /// cancel must not delay a decided outcome. Drop of [`Self::Bind`] is
+    /// the release guarantee.
     fn cancel(&self, bind: &Self::Bind) -> impl Future<Output = Result<()>> + Send;
 
     /// Non-blocking check for an observation that is already due.
