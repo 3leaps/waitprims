@@ -8,14 +8,16 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use tracing::info;
-use waitprims_core::{resolve_bundled, validate_raw_documents, CAPABILITY, PINNED_CRUCIBLE_SHA};
+use waitprims_core::{
+    resolve_bundled, validate_raw_documents, ValidationError, CAPABILITY, PINNED_CRUCIBLE_SHA,
+};
 
 /// Diagnostic CLI for the waitprims library.
 ///
 /// The library is the product. This binary is a local test vehicle.
 /// There is no daemon.
 #[derive(Parser, Debug)]
-#[command(name = "waitprims", version, about, long_about = None)]
+#[command(name = "waitprims", version = env!("WAITPRIMS_VERSION"), about, long_about = None)]
 struct Cli {
     /// The format for log output (stderr).
     #[arg(long, value_name = "FORMAT", default_value = "text")]
@@ -34,7 +36,11 @@ enum Command {
     /// Validate one message or a directory of messages.
     Validate {
         /// File or directory of `agent-wait/v0` JSON documents.
-        path: PathBuf,
+        #[arg(long, value_name = "PATH")]
+        input: Option<PathBuf>,
+        /// Positional alias for `--input`.
+        #[arg(value_name = "PATH")]
+        path: Option<PathBuf>,
     },
     /// Replay a scripted live first-match wait.
     Wait,
@@ -84,17 +90,23 @@ Diagnostic CLI. The library is the product; there is no daemon.",
                 ExitCode::from(1)
             }
         },
-        Some(Command::Validate { path }) => match validate_path(&path) {
-            Ok(count) => {
-                println!(
-                    "{}",
-                    serde_json::json!({
-                        "ok": true,
-                        "documents": count
-                    })
-                );
-                ExitCode::SUCCESS
-            }
+        Some(Command::Validate { input, path }) => match resolve_validate_target(input, path) {
+            Ok(target) => match validate_path(&target) {
+                Ok(count) => {
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "ok": true,
+                            "documents": count
+                        })
+                    );
+                    ExitCode::SUCCESS
+                }
+                Err(err) => {
+                    eprintln!("waitprims validate: {err}");
+                    ExitCode::from(1)
+                }
+            },
             Err(err) => {
                 eprintln!("waitprims validate: {err}");
                 ExitCode::from(1)
@@ -113,6 +125,17 @@ Diagnostic CLI. The library is the product; there is no daemon.",
     }
 }
 
+fn resolve_validate_target(
+    input: Option<PathBuf>,
+    path: Option<PathBuf>,
+) -> Result<PathBuf, waitprims_core::Error> {
+    match (input, path) {
+        (Some(target), None) | (None, Some(target)) => Ok(target),
+        (Some(_), Some(_)) => Err(ValidationError::new("target", "input_and_positional").into()),
+        (None, None) => Err(ValidationError::new("target", "missing").into()),
+    }
+}
+
 fn print_schema() -> Result<(), waitprims_core::Error> {
     let resolved = resolve_bundled(CAPABILITY)?;
     println!(
@@ -127,9 +150,22 @@ fn print_schema() -> Result<(), waitprims_core::Error> {
 }
 
 fn validate_path(path: &Path) -> Result<usize, waitprims_core::Error> {
+    reject_non_local_path(path)?;
     let documents = load_documents(path)?;
     let typed = validate_raw_documents(&documents)?;
     Ok(typed.len())
+}
+
+fn reject_non_local_path(path: &Path) -> Result<(), waitprims_core::Error> {
+    let raw = path.as_os_str().to_string_lossy();
+    if raw == "-" || looks_like_uri(&raw) {
+        return Err(ValidationError::new("target", "local_path_required").into());
+    }
+    Ok(())
+}
+
+fn looks_like_uri(raw: &str) -> bool {
+    raw.contains("://")
 }
 
 fn load_documents(path: &Path) -> Result<Vec<String>, waitprims_core::Error> {
@@ -141,7 +177,7 @@ fn load_documents(path: &Path) -> Result<Vec<String>, waitprims_core::Error> {
         collect_json(path, &mut files)?;
         files.sort();
         if files.is_empty() {
-            return Err(waitprims_core::ValidationError::new("/", "empty_target").into());
+            return Err(ValidationError::new("/", "empty_target").into());
         }
         return files.iter().map(|p| read_raw(p)).collect();
     }

@@ -54,6 +54,8 @@ This tree is an early scaffold (`0.1.0-dev`). APIs are not stable.
 
 Pinned `contract: agent-wait/v0` at Crucible `f1912957cde19b2b1e7809e430cc28dc417287cc`. See [`schemas/v0/PIN.md`](schemas/v0/PIN.md).
 
+`validate_message` and `validate_raw_documents` are the only contract-admission path. `serde_json::from_str` on public message types is not admission.
+
 ## Development
 
 ```bash
@@ -66,9 +68,10 @@ The diagnostic binary lands at `target/debug/waitprims`.
 ```bash
 waitprims --help
 waitprims --version
+waitprims validate --input <file-or-directory>
 ```
 
-Logs go to stderr. Machine output, when added, goes to stdout.
+`validate --input` admits one message file or a directory set. JSON goes to stdout. Logs and errors go to stderr.
 
 ## License
 
