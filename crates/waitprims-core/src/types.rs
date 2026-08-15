@@ -11,6 +11,10 @@ use crate::refs::{ActorRef, CapabilityToken, IdToken, OpaqueRef, PredicateRef};
 use crate::rfc3339::Timestamp;
 
 /// Discriminated `agent-wait/v0` message.
+///
+/// [`Deserialize`] can succeed on documents that fail schema or normative
+/// checks. Contract admission is only [`crate::validate_message`] or
+/// [`crate::validate_raw_documents`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "message_type")]
 pub enum AgentWaitMessage {
