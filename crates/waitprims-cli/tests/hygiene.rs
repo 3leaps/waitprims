@@ -56,12 +56,8 @@ fn residue_hits(text: &str) -> Vec<&'static str> {
     if text.contains("ghp_") || text.contains("xoxb-") || text.contains("xoxp-") {
         hits.push("credential token");
     }
-    if text.contains("AKIA") && text.bytes().filter(|b| b.is_ascii_uppercase()).count() >= 20 {
-        // AWS access keys are AKIA + 16 uppercase alphanumerics. The bare
-        // prefix alone is too short to count; require nearby uppercase run.
-        if has_aws_access_key(text) {
-            hits.push("aws access key");
-        }
+    if has_aws_access_key(text) {
+        hits.push("aws access key");
     }
     if has_openai_style_secret(text) {
         hits.push("secret-shaped token");

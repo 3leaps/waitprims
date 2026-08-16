@@ -690,12 +690,12 @@ fn wait_script_dash_does_not_read_stdin() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn wait");
-    child
-        .stdin
-        .as_mut()
-        .expect("stdin")
-        .write_all(&script)
-        .expect("pipe script");
+    {
+        let mut stdin = child.stdin.take().expect("stdin");
+        // Closing without a read is the proof: a stdin script source
+        // would consume this pipe instead of returning EPIPE.
+        let _ = stdin.write_all(&script);
+    }
     let output = child.wait_with_output().expect("wait dash stdin");
     assert_eq!(output.status.code(), Some(1));
     let stdout = String::from_utf8_lossy(&output.stdout);
