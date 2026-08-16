@@ -25,6 +25,14 @@ fn two_arm_set() -> waitprims_core::RegistrationSet {
     ])
 }
 
+fn one_arm_set() -> waitprims_core::RegistrationSet {
+    registration_set(vec![registration(
+        "reg:sms-1",
+        "sms_inbound",
+        "sms:inbox-1",
+    )])
+}
+
 fn sms_script() -> Script {
     Script {
         buffer_limit: 8,
@@ -127,10 +135,11 @@ async fn successful_wait_does_not_imply_delivery_or_activation() {
         "a successful wait is not deliver/activate evidence"
     );
 
-    let poll_request = poll_cycle_request(&set);
+    let poll_set = one_arm_set();
+    let poll_request = poll_cycle_request(&poll_set);
     let clock = FakeClock::auto(poll_request.created_at.clone());
     let observer = ScriptedObserver::new(sms_script(), clock.clone());
-    let poll = run_poll_cycle(&set, &poll_request, &observer, &clock, &Cancel::new())
+    let poll = run_poll_cycle(&poll_set, &poll_request, &observer, &clock, &Cancel::new())
         .await
         .expect("poll cycle");
     admit_poll(&poll);
@@ -156,6 +165,23 @@ async fn successful_wait_does_not_imply_delivery_or_activation() {
         "",
         "poll request still cites its own activation_ref"
     );
+
+    let leftover = poll_cycle_request(&set);
+    let clock = FakeClock::auto(leftover.created_at.clone());
+    let observer = ScriptedObserver::new(sms_script(), clock.clone());
+    let partial = run_poll_cycle(&set, &leftover, &observer, &clock, &Cancel::new())
+        .await
+        .expect("two-arm one-event poll");
+    admit_poll(&partial);
+    assert_one_wait_kind(partial.outcome_kind);
+    assert_eq!(partial.outcome_kind, OutcomeKind::Partial);
+    for event in &partial.events {
+        assert!(event.delivery_ref.is_none());
+        assert!(
+            event.activation_ref.is_none(),
+            "partial match must not stamp request activation"
+        );
+    }
 }
 
 #[tokio::test]
@@ -201,7 +227,8 @@ async fn attaching_refs_does_not_change_kind_or_message_type() {
         Some(OpaqueRef::new("del:script-1")),
         Some(OpaqueRef::new("act:script-1")),
     );
-    let poll_request = poll_cycle_request(&set);
+    let poll_set = one_arm_set();
+    let poll_request = poll_cycle_request(&poll_set);
     let clock = FakeClock::auto(poll_request.created_at.clone());
     let observer = ScriptedObserver::new(
         Script {
@@ -210,7 +237,7 @@ async fn attaching_refs_does_not_change_kind_or_message_type() {
         },
         clock.clone(),
     );
-    let poll = run_poll_cycle(&set, &poll_request, &observer, &clock, &Cancel::new())
+    let poll = run_poll_cycle(&poll_set, &poll_request, &observer, &clock, &Cancel::new())
         .await
         .expect("poll with caller refs");
     admit_poll(&poll);

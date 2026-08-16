@@ -65,7 +65,6 @@ pub fn attach_event_refs(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::types::MessageType;
 
     #[test]
