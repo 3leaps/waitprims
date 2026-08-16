@@ -164,9 +164,9 @@ fn schema_message_type_prints_one_kind() {
         value, expected,
         "filtered schema must be the kind definition"
     );
-    assert_eq!(
-        value["$id"],
-        "contract:agent-wait/v0/agent-wait-message.schema.json#/$defs/liveWaitOutcome"
+    assert!(
+        value.get("$id").is_none(),
+        "filtered schema must omit fragment $id: {value}"
     );
     assert_eq!(value["type"], "object");
     assert_eq!(
@@ -207,9 +207,57 @@ fn schema_message_type_covers_all_six_kinds() {
             kind.as_str()
         );
         assert_eq!(value["type"], "object");
-        assert!(value.get("$id").is_some());
+        assert!(
+            value.get("$id").is_none(),
+            "kind={} must omit $id",
+            kind.as_str()
+        );
         assert!(value.get("properties").is_some());
         assert!(value.get("$defs").is_some());
+    }
+}
+
+#[test]
+fn schema_message_type_payloads_compile_and_admit_examples() {
+    for kind in MessageType::ALL {
+        let output = bin()
+            .args(["schema", "--message-type", kind.as_str()])
+            .output()
+            .expect("schema --message-type kind");
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "kind={} stderr={}",
+            kind.as_str(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let schema: serde_json::Value =
+            serde_json::from_str(stdout.trim()).expect("schema stdout must be JSON");
+        assert!(
+            schema.get("$id").is_none(),
+            "kind={} CLI payload must omit $id: {schema}",
+            kind.as_str()
+        );
+        let validator = jsonschema::validator_for(&schema).unwrap_or_else(|err| {
+            panic!(
+                "waitprims schema --message-type {} must compile: {err}",
+                kind.as_str()
+            )
+        });
+        let example_path = vendor_root()
+            .join("examples")
+            .join(format!("{}.example.json", kind.as_str()));
+        let example: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&example_path).expect("read kind example"),
+        )
+        .expect("parse kind example");
+        assert!(
+            validator.is_valid(&example),
+            "kind={} schema must admit {}",
+            kind.as_str(),
+            example_path.display()
+        );
     }
 }
 

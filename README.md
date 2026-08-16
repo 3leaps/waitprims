@@ -74,7 +74,7 @@ waitprims poll --registration-set <file> --request <file> --script <file>
 waitprims schema [--message-type <message_type>]
 ```
 
-`validate --input` admits one message file or a directory set. `wait` resolves a cited registration set and first-matches a scripted observer. `poll` runs one bounded poll-cycle over the same set. `schema` prints the bundled JSON Schema (`$id` and document); `--message-type` prints that kind's definition. JSON goes to stdout. Logs and errors go to stderr. Scripts are local files; `--script -` is rejected.
+`validate --input` admits one message file or a directory set. `wait` resolves a cited registration set and first-matches a scripted observer. `poll` runs one bounded poll-cycle over the same set. `schema` prints the bundled JSON Schema (`$id` and document); `--message-type` prints that kind's definition without minting a fragment `$id`. JSON goes to stdout. Logs and errors go to stderr. Scripts are local files; `--script -` is rejected.
 
 ## License
 

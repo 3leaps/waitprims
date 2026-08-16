@@ -113,7 +113,9 @@ pub fn bundled_entry_schema() -> Result<Value> {
 /// JSON Schema for one admitted `message_type`, selected from `$defs`.
 ///
 /// The camel-case def name stays inside this module. The returned document
-/// carries `$id`, `type`, `properties`, and the referenced `$defs`.
+/// carries `type`, `properties`, and the referenced `$defs`. It does not
+/// assign `$id`: a schema resource base URI cannot contain a fragment, and
+/// this extraction is not a second registered resource.
 pub fn bundled_message_schema(kind: MessageType) -> Result<Value> {
     select_message_schema(&bundled_entry_schema()?, kind)
 }
@@ -170,12 +172,10 @@ fn select_message_schema(entry: &Value, kind: MessageType) -> Result<Value> {
     if let Some(schema) = entry.get("$schema") {
         out.insert("$schema".to_string(), schema.clone());
     }
-    let base_id = entry.get("$id").and_then(Value::as_str).unwrap_or("");
-    out.insert(
-        "$id".to_string(),
-        Value::String(format!("{base_id}#/$defs/{def_name}")),
-    );
     for (key, value) in def_obj {
+        if key == "$id" {
+            continue;
+        }
         out.insert(key.clone(), value.clone());
     }
     out.insert("$defs".to_string(), Value::Object(selected));
@@ -277,9 +277,9 @@ mod tests {
     #[test]
     fn bundled_message_schema_is_the_kind_definition() {
         let schema = bundled_message_schema(MessageType::LiveWaitOutcome).unwrap();
-        assert_eq!(
-            schema["$id"],
-            "contract:agent-wait/v0/agent-wait-message.schema.json#/$defs/liveWaitOutcome"
+        assert!(
+            schema.get("$id").is_none(),
+            "extracted kind schema must not mint a fragment $id: {schema}"
         );
         assert_eq!(schema["type"], "object");
         assert!(schema.get("properties").is_some());
@@ -292,5 +292,38 @@ mod tests {
         assert!(defs.contains_key("outcomeKind"));
         assert!(!defs.contains_key("liveWaitOutcome"));
         assert!(!defs.contains_key("pollCycleAck"));
+    }
+
+    #[test]
+    fn bundled_message_schema_compiles_and_admits_each_kind_example() {
+        for kind in MessageType::ALL {
+            let schema = bundled_message_schema(kind).unwrap();
+            assert!(
+                schema.get("$id").is_none(),
+                "{} must omit $id: {schema}",
+                kind.as_str()
+            );
+            let validator = jsonschema::validator_for(&schema).unwrap_or_else(|err| {
+                panic!(
+                    "bundled_message_schema({}) must compile: {err}",
+                    kind.as_str()
+                )
+            });
+            let example = kind_example(kind);
+            assert!(
+                validator.is_valid(&example),
+                "{} schema must admit its pinned example",
+                kind.as_str()
+            );
+        }
+    }
+
+    fn kind_example(kind: MessageType) -> Value {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../schemas/v0/examples")
+            .join(format!("{}.example.json", kind.as_str()));
+        let raw = fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("read {}: {err}", path.display()));
+        serde_json::from_str(&raw).unwrap_or_else(|err| panic!("parse {}: {err}", path.display()))
     }
 }
