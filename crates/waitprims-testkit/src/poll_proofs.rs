@@ -1,12 +1,12 @@
-//! Proofs: poll-cycle coverage, fairness, ack, replay, starvation, dirty arms.
+//! Proofs: poll-cycle coverage, fairness, ack, replay, retention, starvation, dirty arms.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use waitprims_async::{event_surface_bytes, run_poll_cycle, Cancel};
+use waitprims_async::{event_surface_bytes, run_poll_cycle, Cancel, POLL_ACK_RETENTION};
 use waitprims_core::{
     validate_message, validate_raw_documents, AgentWaitMessage, Anchor, AnchorKind, ArmStatus,
-    IdToken, OutcomeKind, PollBound, PollCycleAck, PollCycleOutcome, Timestamp,
+    IdToken, MessageType, OutcomeKind, PollBound, PollCycleAck, PollCycleOutcome, Timestamp,
 };
 
 use crate::{
@@ -1177,6 +1177,368 @@ async fn oversized_first_event_is_restored_not_dropped() {
         second.events
     );
     assert_eq!(observer.live_bind_count(), 0);
+}
+
+#[tokio::test]
+async fn admitted_events_and_cursors_commit_only_on_poll_cycle_ack() {
+    assert!(
+        POLL_ACK_RETENTION.contains("not committed until poll_cycle_ack"),
+        "addendum must name the commit: {POLL_ACK_RETENTION}"
+    );
+    assert_eq!(MessageType::ALL.len(), 6);
+    assert_eq!(
+        MessageType::parse("poll_cycle_ack"),
+        Some(MessageType::PollCycleAck)
+    );
+    assert_eq!(MessageType::parse("live_wait_ack"), None);
+
+    let set = registration_set(vec![registration(
+        "reg:sms-1",
+        "sms_inbound",
+        "sms:inbox-1",
+    )]);
+    let request = poll_cycle_request(&set);
+    let script = Script {
+        buffer_limit: 8,
+        events: vec![wait_event(
+            "reg:sms-1",
+            "sms_inbound",
+            "evt:sms-1",
+            "2026-08-15T16:05:00Z",
+        )],
+    };
+    let clock = FakeClock::auto(request.created_at.clone());
+    let first_observer = ScriptedObserver::new(script.clone(), clock.clone());
+    let first = run_cycle(&set, &request, &first_observer, &clock).await;
+    assert_eq!(first.outcome_kind, OutcomeKind::Events);
+    assert_eq!(first.events[0].event_id.as_str(), "evt:sms-1");
+    let start = first
+        .arms
+        .iter()
+        .find(|arm| arm.registration_id.as_str() == "reg:sms-1")
+        .map(|arm| arm.start_anchor.clone())
+        .expect("start");
+    let proposed = first
+        .proposed_next_anchors
+        .get("reg:sms-1")
+        .expect("proposed")
+        .clone();
+    assert_ne!(proposed, start, "outcome may propose a later cursor");
+    assert_eq!(
+        first.retained_through.get("reg:sms-1"),
+        Some(&proposed),
+        "retained_through is a proposal until ack"
+    );
+
+    let clock = FakeClock::auto(request.created_at.clone());
+    let replay_observer = ScriptedObserver::new(script, clock.clone());
+    let replay = run_cycle(&set, &request, &replay_observer, &clock).await;
+    assert_eq!(replay.events[0].event_id.as_str(), "evt:sms-1");
+    assert_eq!(
+        replay
+            .arms
+            .iter()
+            .find(|arm| arm.registration_id.as_str() == "reg:sms-1")
+            .map(|arm| &arm.start_anchor),
+        Some(&start)
+    );
+    let first_json = serde_json::to_string(&AgentWaitMessage::PollCycleOutcome(first.clone()))
+        .expect("serialize first");
+    let replay_json = serde_json::to_string(&AgentWaitMessage::PollCycleOutcome(replay.clone()))
+        .expect("serialize replay");
+    validate_raw_documents([&first_json, &replay_json])
+        .expect("unacked replay must not look like a silent advance");
+
+    let ack = ack_poll_outcome(&first);
+    admit_pair(&first, &ack);
+    let mut committed_req = request.clone();
+    committed_req.message_id = IdToken::new("msg:aw-poll-req-2");
+    committed_req.acknowledged_anchors = ack.committed_anchors.clone();
+    let clock = FakeClock::auto(committed_req.created_at.clone());
+    let committed_observer = ScriptedObserver::new(Script::default(), clock.clone());
+    let committed = run_cycle(&set, &committed_req, &committed_observer, &clock).await;
+    assert!(committed.events.is_empty());
+    assert_eq!(
+        committed_observer.bind_requested_starts().get("reg:sms-1"),
+        Some(&Some(proposed.clone()))
+    );
+    assert_eq!(
+        committed
+            .arms
+            .iter()
+            .find(|arm| arm.registration_id.as_str() == "reg:sms-1")
+            .map(|arm| &arm.start_anchor),
+        Some(&proposed)
+    );
+}
+
+#[tokio::test]
+async fn deferred_observations_replay_in_order_when_restored() {
+    assert!(
+        POLL_ACK_RETENTION.contains("deferred observations replay in order if restored"),
+        "addendum must name restore order: {POLL_ACK_RETENTION}"
+    );
+    let set = two_arm_set();
+    let at = "2026-08-15T16:05:00Z";
+    let mut left = wait_event("reg:chanvoy-1", "chanvoy_wait", "evt:left", at);
+    left.proposed_next_anchor.value = IdToken::new("anc:after-left");
+    let mut right = wait_event("reg:sms-1", "sms_inbound", "evt:right", at);
+    right.proposed_next_anchor.value = IdToken::new("anc:after-right");
+    let script = Script {
+        buffer_limit: 8,
+        events: vec![left, right],
+    };
+    let mut first_req = poll_cycle_request(&set);
+    first_req.bound = Some(PollBound {
+        max_events: Some(1),
+        max_payload_refs: None,
+        max_bytes: None,
+    });
+    let clock = FakeClock::auto(first_req.created_at.clone());
+    let observer = ScriptedObserver::new(script, clock.clone());
+    let first = run_cycle(&set, &first_req, &observer, &clock).await;
+    assert_eq!(first.outcome_kind, OutcomeKind::Partial);
+    assert_eq!(
+        first
+            .events
+            .iter()
+            .map(|event| event.event_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["evt:left"]
+    );
+    assert_eq!(
+        first
+            .arms
+            .iter()
+            .find(|arm| arm.registration_id.as_str() == "reg:sms-1")
+            .map(|arm| arm.status),
+        Some(ArmStatus::Deferred)
+    );
+    assert_eq!(
+        observer
+            .queued_event_ids()
+            .get("reg:sms-1")
+            .map(Vec::as_slice),
+        Some(["evt:right".to_string()].as_slice()),
+        "deferred same-instant loser must be restored in order: {:?}",
+        observer.queued_event_ids()
+    );
+
+    let mut second_req = first_req.clone();
+    second_req.message_id = IdToken::new("msg:aw-poll-req-2");
+    second_req.fairness_cursor = first.next_fairness_cursor.clone();
+    let second = run_cycle(&set, &second_req, &observer, &clock).await;
+    assert_eq!(
+        second
+            .events
+            .iter()
+            .map(|event| event.event_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["evt:right"],
+        "restored deferred observation must replay next: {:?}",
+        second.events
+    );
+    assert_eq!(
+        second
+            .proposed_next_anchors
+            .get("reg:sms-1")
+            .map(|a| a.value.as_str()),
+        Some("anc:after-right")
+    );
+    assert_eq!(observer.live_bind_count(), 0);
+
+    let mut one = registration("reg:sms-1", "sms_inbound", "sms:inbox-1");
+    one.bounds.max_events = 1;
+    let one_set = registration_set(vec![one]);
+    let mut early = wait_event(
+        "reg:sms-1",
+        "sms_inbound",
+        "evt:sms-1",
+        "2026-08-15T16:05:00Z",
+    );
+    early.proposed_next_anchor.value = IdToken::new("anc:after-1");
+    let mut late = wait_event(
+        "reg:sms-1",
+        "sms_inbound",
+        "evt:sms-2",
+        "2026-08-15T16:05:00Z",
+    );
+    late.proposed_next_anchor.value = IdToken::new("anc:after-2");
+    let ordered = Script {
+        buffer_limit: 8,
+        events: vec![early, late],
+    };
+    let one_req = poll_cycle_request(&one_set);
+    let clock = FakeClock::auto(one_req.created_at.clone());
+    let observer = ScriptedObserver::new(ordered, clock.clone());
+    let first = run_cycle(&one_set, &one_req, &observer, &clock).await;
+    assert_eq!(
+        first
+            .events
+            .iter()
+            .map(|event| event.event_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["evt:sms-1"]
+    );
+    assert_eq!(
+        observer
+            .queued_event_ids()
+            .get("reg:sms-1")
+            .map(Vec::as_slice),
+        Some(["evt:sms-2".to_string()].as_slice())
+    );
+    let mut second_req = one_req.clone();
+    second_req.message_id = IdToken::new("msg:aw-poll-req-2");
+    let second = run_cycle(&one_set, &second_req, &observer, &clock).await;
+    assert_eq!(
+        second
+            .events
+            .iter()
+            .map(|event| event.event_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["evt:sms-2"],
+        "same-arm leftover must replay in restore order: {:?}",
+        second.events
+    );
+}
+
+#[tokio::test]
+async fn cancel_bound_exhaustion_and_restart_before_ack_do_not_advance_cursors() {
+    assert!(
+        POLL_ACK_RETENTION.contains("must not silently advance cursors"),
+        "addendum must name silent-advance: {POLL_ACK_RETENTION}"
+    );
+
+    let set = registration_set(vec![registration(
+        "reg:sms-1",
+        "sms_inbound",
+        "sms:inbox-1",
+    )]);
+    let request = poll_cycle_request(&set);
+    let script = Script {
+        buffer_limit: 8,
+        events: vec![wait_event(
+            "reg:sms-1",
+            "sms_inbound",
+            "evt:sms-1",
+            "2026-08-15T16:05:00Z",
+        )],
+    };
+    let clock = FakeClock::auto(request.created_at.clone());
+    let first = run_cycle(
+        &set,
+        &request,
+        &ScriptedObserver::new(script.clone(), clock.clone()),
+        &clock,
+    )
+    .await;
+    assert_eq!(first.outcome_kind, OutcomeKind::Events);
+    let original = Anchor {
+        kind: AnchorKind::ProviderOpaque,
+        value: IdToken::new("anc:cursor-0"),
+    };
+    let proposed = first
+        .proposed_next_anchors
+        .get("reg:sms-1")
+        .expect("proposed")
+        .clone();
+    assert_ne!(proposed, original);
+
+    let cancel = Cancel::new();
+    cancel.trigger();
+    let clock = FakeClock::auto(request.created_at.clone());
+    let cancelled = run_poll_cycle(
+        &set,
+        &request,
+        &ScriptedObserver::new(Script::default(), clock.clone()),
+        &clock,
+        &cancel,
+    )
+    .await
+    .expect("pre-ack cancel");
+    admit(&cancelled);
+    assert_eq!(cancelled.outcome_kind, OutcomeKind::Cancelled);
+    assert_eq!(
+        cancelled.retained_through.get("reg:sms-1"),
+        Some(&original),
+        "cancel before ack must keep the start cursor"
+    );
+    assert_eq!(
+        cancelled.proposed_next_anchors.get("reg:sms-1"),
+        Some(&original)
+    );
+    assert_ne!(
+        cancelled.retained_through.get("reg:sms-1"),
+        Some(&proposed),
+        "cancel must not inherit an unacked proposed cursor"
+    );
+
+    let mut tight_reg = registration("reg:sms-1", "sms_inbound", "sms:inbox-1");
+    tight_reg.bounds.max_events = 1;
+    let tight_set = registration_set(vec![tight_reg]);
+    let mut first_evt = wait_event(
+        "reg:sms-1",
+        "sms_inbound",
+        "evt:sms-1",
+        "2026-08-15T16:05:00Z",
+    );
+    first_evt.proposed_next_anchor.value = IdToken::new("anc:after-1");
+    let mut leftover = wait_event(
+        "reg:sms-1",
+        "sms_inbound",
+        "evt:sms-2",
+        "2026-08-15T16:05:00Z",
+    );
+    leftover.proposed_next_anchor.value = IdToken::new("anc:after-2");
+    let bounded = Script {
+        buffer_limit: 8,
+        events: vec![first_evt, leftover],
+    };
+    let tight_req = poll_cycle_request(&tight_set);
+    let clock = FakeClock::auto(tight_req.created_at.clone());
+    let observer = ScriptedObserver::new(bounded.clone(), clock.clone());
+    let exhausted = run_cycle(&tight_set, &tight_req, &observer, &clock).await;
+    assert_eq!(exhausted.outcome_kind, OutcomeKind::Partial);
+    assert_eq!(exhausted.events[0].event_id.as_str(), "evt:sms-1");
+    assert_eq!(
+        exhausted
+            .retained_through
+            .get("reg:sms-1")
+            .map(|a| a.value.as_str()),
+        Some("anc:after-1")
+    );
+    assert_eq!(
+        observer
+            .queued_event_ids()
+            .get("reg:sms-1")
+            .map(Vec::as_slice),
+        Some(["evt:sms-2".to_string()].as_slice())
+    );
+
+    let clock = FakeClock::auto(tight_req.created_at.clone());
+    let restart = run_cycle(
+        &tight_set,
+        &tight_req,
+        &ScriptedObserver::new(bounded, clock.clone()),
+        &clock,
+    )
+    .await;
+    assert_eq!(restart.events[0].event_id.as_str(), "evt:sms-1");
+    assert_eq!(
+        restart
+            .arms
+            .iter()
+            .find(|arm| arm.registration_id.as_str() == "reg:sms-1")
+            .map(|arm| arm.start_anchor.value.as_str()),
+        Some("anc:cursor-0"),
+        "restart between outcome and ack must bind the original start"
+    );
+    let exhausted_json =
+        serde_json::to_string(&AgentWaitMessage::PollCycleOutcome(exhausted)).expect("serialize");
+    let restart_json =
+        serde_json::to_string(&AgentWaitMessage::PollCycleOutcome(restart)).expect("serialize");
+    validate_raw_documents([&exhausted_json, &restart_json])
+        .expect("unacked bound-exhaustion restart must not silently advance");
 }
 
 #[test]

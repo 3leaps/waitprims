@@ -5,6 +5,8 @@
 //! When two or more arms accept an observation at the same logical instant,
 //! the winner is the arm that appears first in
 //! `registration_set.registrations`. That order is the only tie break.
+//! Same-instant losers are not dropped: they go through
+//! [`Observer::restore_ready`] so a later wait can replay them.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -33,8 +35,9 @@ const BACKOFF_MS: &[u64] = &[50, 100, 200, 400, 800, 1000];
 /// provider cursor at bind and kept for coverage. A required registration
 /// still pending bind at a terminal deadline is `failed`, never a
 /// clean-complete `no_change` / `logical_deadman`. After a decision the
-/// runner drops binds; it does not await [`Observer::cancel`]. Emits a
-/// `live_wait_outcome` body. Callers serialize
+/// runner restores consumed non-winner observations, then drops binds; it
+/// does not await [`Observer::cancel`]. Emits a `live_wait_outcome` body.
+/// Callers serialize
 /// [`waitprims_core::AgentWaitMessage::LiveWaitOutcome`] for the wire.
 /// Observed events keep their own optional `delivery_ref` / `activation_ref`;
 /// a match does not invent deliver/activate evidence.
@@ -101,6 +104,20 @@ fn starts_from_binds<B: BindHandle>(binds: &[B]) -> Vec<ResolvedStart> {
         .collect()
 }
 
+fn starts_from_indexed<B: BindHandle>(binds: &[(usize, B)]) -> Vec<ResolvedStart> {
+    binds
+        .iter()
+        .map(|(_, bind)| ResolvedStart {
+            registration_id: bind.registration_id().clone(),
+            start: bind.resolved_start().clone(),
+        })
+        .collect()
+}
+
+fn indexed_binds<B>(binds: &[B]) -> Vec<(usize, &B)> {
+    binds.iter().enumerate().collect()
+}
+
 fn required_binding_complete(set: &RegistrationSet, resolved: &[ResolvedStart]) -> bool {
     set.registrations
         .iter()
@@ -153,8 +170,11 @@ where
                     observation_is_terminal,
                 ) => {
                     let mut ready = ready?;
-                    extend_ready(observer, binds, &mut ready);
-                    if let Some(outcome) = decide(set, request, &clock.now(), &ready, &starts) {
+                    let indexed = indexed_binds(binds);
+                    extend_ready_refs(observer, &indexed, &mut ready);
+                    if let Some(outcome) =
+                        decide_and_restore(observer, set, request, &clock.now(), &indexed, ready, &starts)
+                    {
                         return Ok(finish(set, request, clock.now(), outcome));
                     }
                     backoff_step = backoff_step.saturating_add(1);
@@ -179,8 +199,11 @@ where
                 _ = clock.sleep_until(wait_until) => {
                     let now = clock.now();
                     let mut ready = Vec::new();
-                    extend_ready(observer, binds, &mut ready);
-                    if let Some(outcome) = decide(set, request, &now, &ready, &starts) {
+                    let indexed = indexed_binds(binds);
+                    extend_ready_refs(observer, &indexed, &mut ready);
+                    if let Some(outcome) =
+                        decide_and_restore(observer, set, request, &now, &indexed, ready, &starts)
+                    {
                         return Ok(finish(set, request, now, outcome));
                     }
                     if let Some(done) = terminal_deadline(set, request, &now, &starts) {
@@ -209,13 +232,27 @@ where
                     observations.push((idx, observation));
                     indexed_binds.push((idx, bind));
                 }
-                extend_ready_at(observer, &indexed_binds, &mut observations);
+                let starts = starts_from_indexed(&indexed_binds);
+                {
+                    let bind_refs: Vec<(usize, &O::Bind)> = indexed_binds
+                        .iter()
+                        .map(|(idx, bind)| (*idx, bind))
+                        .collect();
+                    extend_ready_refs(observer, &bind_refs, &mut observations);
+                    if let Some(outcome) = decide_and_restore(
+                        observer,
+                        set,
+                        request,
+                        &clock.now(),
+                        &bind_refs,
+                        observations,
+                        &starts,
+                    ) {
+                        return Ok(finish(set, request, clock.now(), outcome));
+                    }
+                }
                 indexed_binds.sort_by_key(|(idx, _)| *idx);
                 let held: Vec<O::Bind> = indexed_binds.into_iter().map(|(_, bind)| bind).collect();
-                let starts = starts_from_binds(&held);
-                if let Some(outcome) = decide(set, request, &clock.now(), &observations, &starts) {
-                    return Ok(finish(set, request, clock.now(), outcome));
-                }
                 bound = Some(held);
                 backoff_step = backoff_step.saturating_add(1);
                 sleep_backoff(clock, cancel, request, backoff_step).await;
@@ -253,24 +290,6 @@ async fn sleep_backoff<C: Clock>(
     }
 }
 
-fn extend_ready<O: Observer>(
-    observer: &O,
-    binds: &[O::Bind],
-    ready: &mut Vec<(usize, Observation)>,
-) {
-    let indexed: Vec<(usize, &O::Bind)> = binds.iter().enumerate().collect();
-    extend_ready_refs(observer, &indexed, ready);
-}
-
-fn extend_ready_at<O: Observer>(
-    observer: &O,
-    binds: &[(usize, O::Bind)],
-    ready: &mut Vec<(usize, Observation)>,
-) {
-    let indexed: Vec<(usize, &O::Bind)> = binds.iter().map(|(idx, bind)| (*idx, bind)).collect();
-    extend_ready_refs(observer, &indexed, ready);
-}
-
 fn extend_ready_refs<O: Observer>(
     observer: &O,
     binds: &[(usize, &O::Bind)],
@@ -284,6 +303,46 @@ fn extend_ready_refs<O: Observer>(
             ready.push((*idx, obs));
         }
     }
+}
+
+fn event_winner_idx(ready: &[(usize, Observation)]) -> Option<usize> {
+    ready
+        .iter()
+        .filter_map(|(idx, obs)| match obs {
+            Observation::Event(_) => Some(*idx),
+            _ => None,
+        })
+        .min()
+}
+
+fn restore_losers<O: Observer>(
+    observer: &O,
+    binds: &[(usize, &O::Bind)],
+    ready: Vec<(usize, Observation)>,
+) {
+    let winner = event_winner_idx(&ready);
+    for (idx, obs) in ready {
+        if Some(idx) == winner || matches!(obs, Observation::Idle) {
+            continue;
+        }
+        if let Some((_, bind)) = binds.iter().find(|(have, _)| *have == idx) {
+            observer.restore_ready(bind, obs);
+        }
+    }
+}
+
+fn decide_and_restore<O: Observer>(
+    observer: &O,
+    set: &RegistrationSet,
+    request: &LiveWaitRequest,
+    now: &Timestamp,
+    binds: &[(usize, &O::Bind)],
+    ready: Vec<(usize, Observation)>,
+    resolved: &[ResolvedStart],
+) -> Option<LiveWaitOutcome> {
+    let outcome = decide(set, request, now, &ready, resolved)?;
+    restore_losers(observer, binds, ready);
+    Some(outcome)
 }
 
 fn decide(

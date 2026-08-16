@@ -163,6 +163,25 @@ impl ScriptedObserver {
         self.bind_resolved.lock().expect("observer").clone()
     }
 
+    /// Event ids still queued, front first, keyed by registration id.
+    pub fn queued_event_ids(&self) -> BTreeMap<String, Vec<String>> {
+        self.queues
+            .events
+            .lock()
+            .expect("observer")
+            .iter()
+            .map(|(rid, queue)| {
+                (
+                    rid.clone(),
+                    queue
+                        .iter()
+                        .map(|event| event.event_id.as_str().to_string())
+                        .collect(),
+                )
+            })
+            .collect()
+    }
+
     fn take_due(&self, registration_id: &str) -> Option<Observation> {
         if let Some(fault) = self.fault_observation(registration_id) {
             return Some(fault);

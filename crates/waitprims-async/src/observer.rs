@@ -99,7 +99,8 @@ pub trait Observer: Send + Sync {
     ///
     /// Required. The runner calls this for every rejected or deferred
     /// owned observation, whether it came from [`Self::poll_ready`] or
-    /// [`Self::next`]. Implementations that never dequeue from
-    /// [`Self::poll_ready`] may no-op, but the method cannot be omitted.
+    /// [`Self::next`]. First-match same-instant losers use this path,
+    /// matching poll-cycle deferral. Implementations that never dequeue
+    /// from [`Self::poll_ready`] may no-op, but the method cannot be omitted.
     fn restore_ready(&self, bind: &Self::Bind, obs: Observation);
 }

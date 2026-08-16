@@ -8,6 +8,11 @@
 //! Acknowledged anchors are applied at bind. Pending binds never mint a
 //! provider cursor. Collection stops when representable bounds are exhausted.
 //! Request `activation_ref` is not copied onto observed events.
+//!
+//! # Ack / retention
+//!
+//! See [`POLL_ACK_RETENTION`]. This is consumer-facing runner semantics
+//! on the existing `poll_cycle_ack` kind, not a tenth wire message.
 
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
@@ -23,6 +28,14 @@ use crate::clock::Clock;
 use crate::observer::{BindHandle, Observation, Observer};
 use crate::outcome::ResolvedStart;
 use crate::race::{observation_is_terminal, FirstReady};
+
+/// Consumer-facing poll ack / retention addendum. Not a wire kind.
+///
+/// Admitted events and cursors stay uncommitted until `poll_cycle_ack`.
+/// Deferred observations replay in order when restored. Cancel, bound
+/// exhaustion, and a restart between outcome and ack must not silently
+/// advance cursors.
+pub const POLL_ACK_RETENTION: &str = "admitted events/cursors are not committed until poll_cycle_ack; deferred observations replay in order if restored; cancel, bound exhaustion, and a restart between outcome and ack must not silently advance cursors";
 
 #[derive(Debug, Clone)]
 enum ArmVisit {
@@ -181,8 +194,9 @@ impl CollectBudget {
 /// never a clean-complete `no_change` / `logical_deadman`. Fairness
 /// leftover at `run_deadline` is `deferred`. Outage, cursor uncertainty,
 /// and degradation on a required arm are never a clean complete.
-/// Callers serialize [`waitprims_core::AgentWaitMessage::PollCycleOutcome`]
-/// for the wire.
+/// Outcome events and cursors stay uncommitted until `poll_cycle_ack`
+/// ([`POLL_ACK_RETENTION`]). Callers serialize
+/// [`waitprims_core::AgentWaitMessage::PollCycleOutcome`] for the wire.
 pub async fn run_poll_cycle<O, C>(
     set: &RegistrationSet,
     request: &PollCycleRequest,
