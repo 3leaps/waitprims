@@ -103,18 +103,6 @@ impl MessageType {
     pub fn parse(raw: &str) -> Option<Self> {
         Self::ALL.iter().copied().find(|kind| kind.as_str() == raw)
     }
-
-    /// Camel-case `$defs` name in the bundled entry schema.
-    pub fn schema_def_name(self) -> &'static str {
-        match self {
-            Self::RegistrationSet => "registrationSet",
-            Self::LiveWaitRequest => "liveWaitRequest",
-            Self::LiveWaitOutcome => "liveWaitOutcome",
-            Self::PollCycleRequest => "pollCycleRequest",
-            Self::PollCycleOutcome => "pollCycleOutcome",
-            Self::PollCycleAck => "pollCycleAck",
-        }
-    }
 }
 
 /// `registration_set` body.
@@ -732,10 +720,6 @@ mod tests {
             Some(MessageType::PollCycleAck)
         );
         assert_eq!(MessageType::parse("live_wait_ack"), None);
-        assert_eq!(
-            MessageType::LiveWaitOutcome.schema_def_name(),
-            "liveWaitOutcome"
-        );
     }
 
     #[test]

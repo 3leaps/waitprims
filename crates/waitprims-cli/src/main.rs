@@ -10,9 +10,9 @@ use clap::{Parser, Subcommand, ValueEnum};
 use tracing::info;
 use waitprims_async::{run_first_match, run_poll_cycle, Cancel};
 use waitprims_core::{
-    resolve_bundled, validate_message, validate_raw_documents, AgentWaitMessage, Error,
-    LiveWaitRequest, MessageType, PollCycleRequest, RegistrationSet, ValidationError, CAPABILITY,
-    PINNED_CRUCIBLE_SHA,
+    bundled_entry_schema, bundled_message_schema, validate_message, validate_raw_documents,
+    AgentWaitMessage, Error, LiveWaitRequest, MessageType, PollCycleRequest, RegistrationSet,
+    ValidationError,
 };
 use waitprims_testkit::{FakeClock, Script, ScriptedObserver};
 
@@ -67,7 +67,7 @@ enum Command {
         #[arg(long, value_name = "PATH")]
         script: PathBuf,
     },
-    /// Print bundled schema identifiers.
+    /// Print the bundled JSON Schema, or one message kind's definition.
     Schema {
         /// Restrict output to one of the six `message_type` values.
         #[arg(long, value_name = "KIND")]
@@ -301,56 +301,16 @@ fn take_set_and_request(
 }
 
 fn print_schema(message_type: Option<&str>) -> Result<(), waitprims_core::Error> {
-    let resolved = resolve_bundled(CAPABILITY)?;
-    let defs = resolved
-        .entry_schema
-        .get("$defs")
-        .ok_or_else(|| ValidationError::new("/$defs", "missing"))?;
-    match message_type {
-        None => {
-            let message_types: Vec<_> = MessageType::ALL
-                .iter()
-                .map(|kind| {
-                    serde_json::json!({
-                        "message_type": kind.as_str(),
-                        "def": kind.schema_def_name(),
-                    })
-                })
-                .collect();
-            for kind in MessageType::ALL {
-                if defs.get(kind.schema_def_name()).is_none() {
-                    return Err(ValidationError::new("/$defs", "missing_kind").into());
-                }
-            }
-            println!(
-                "{}",
-                serde_json::json!({
-                    "capability": resolved.capability,
-                    "entry_schema": resolved.entry_schema_name,
-                    "crucible_sha": PINNED_CRUCIBLE_SHA,
-                    "message_types": message_types,
-                })
-            );
-        }
+    let schema = match message_type {
+        None => bundled_entry_schema()?,
         Some(raw) => {
             let kind = MessageType::parse(raw)
                 .ok_or_else(|| ValidationError::new("/message_type", "undeclared_message_type"))?;
-            let def_name = kind.schema_def_name();
-            if defs.get(def_name).is_none() {
-                return Err(ValidationError::new("/$defs", "missing_kind").into());
-            }
-            println!(
-                "{}",
-                serde_json::json!({
-                    "capability": resolved.capability,
-                    "entry_schema": resolved.entry_schema_name,
-                    "crucible_sha": PINNED_CRUCIBLE_SHA,
-                    "message_type": kind.as_str(),
-                    "def": def_name,
-                })
-            );
+            bundled_message_schema(kind)?
         }
-    }
+    };
+    let json = serde_json::to_string(&schema).map_err(|_| Error::MalformedJson)?;
+    println!("{json}");
     Ok(())
 }
 

@@ -18,7 +18,8 @@ pub mod types;
 pub mod validate;
 
 pub use contract::{
-    resolve_bundled, resolve_from_dir, ResolvedContract, CAPABILITY, PINNED_CRUCIBLE_SHA,
+    bundled_entry_schema, bundled_message_schema, resolve_bundled, resolve_from_dir,
+    ResolvedContract, CAPABILITY, PINNED_CRUCIBLE_SHA,
 };
 pub use digest::registration_digest;
 pub use error::{Error, NormativeReason, Result, ValidationError};

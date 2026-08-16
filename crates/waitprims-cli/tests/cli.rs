@@ -3,7 +3,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use waitprims_async::{run_first_match, run_poll_cycle, Cancel};
-use waitprims_core::{validate_message, validate_raw_documents, AgentWaitMessage, MessageType};
+use waitprims_core::{
+    bundled_entry_schema, bundled_message_schema, validate_message, validate_raw_documents,
+    AgentWaitMessage, MessageType,
+};
 use waitprims_testkit::{FakeClock, Script, ScriptedObserver};
 
 fn bin() -> Command {
@@ -100,32 +103,31 @@ fn validate_help_shows_input_flag() {
 }
 
 #[test]
-fn schema_prints_capability_and_pin() {
+fn schema_prints_bundled_entry_schema() {
     let output = bin().arg("schema").output().expect("run schema");
-    assert!(output.status.success());
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     let value: serde_json::Value =
         serde_json::from_str(stdout.trim()).expect("schema stdout must be JSON");
-    assert_eq!(value["capability"], "contract: agent-wait/v0");
-    assert_eq!(value["entry_schema"], "agent-wait-message.schema.json");
+    let expected = bundled_entry_schema().expect("bundled entry schema");
+    assert_eq!(value, expected, "schema must emit the bundled entry schema");
     assert_eq!(
-        value["crucible_sha"],
-        "f1912957cde19b2b1e7809e430cc28dc417287cc"
+        value["$id"],
+        "contract:agent-wait/v0/agent-wait-message.schema.json"
     );
-    let kinds = value["message_types"]
-        .as_array()
-        .expect("schema must list the six kinds");
-    let names: Vec<_> = kinds
-        .iter()
-        .map(|item| item["message_type"].as_str().expect("message_type"))
-        .collect();
-    assert_eq!(
-        names,
-        MessageType::ALL
-            .iter()
-            .map(|kind| kind.as_str())
-            .collect::<Vec<_>>()
+    assert!(value.get("oneOf").is_some(), "entry schema must keep oneOf");
+    assert!(value.get("$defs").is_some(), "entry schema must keep $defs");
+    assert!(
+        value.get("properties").is_some(),
+        "entry schema must keep properties"
     );
+    assert!(value.get("capability").is_none());
+    assert!(value.get("message_types").is_none());
 }
 
 #[test]
@@ -157,9 +159,58 @@ fn schema_message_type_prints_one_kind() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let value: serde_json::Value =
         serde_json::from_str(stdout.trim()).expect("schema stdout must be JSON");
-    assert_eq!(value["message_type"], "live_wait_outcome");
-    assert_eq!(value["def"], "liveWaitOutcome");
+    let expected = bundled_message_schema(MessageType::LiveWaitOutcome).expect("kind schema");
+    assert_eq!(
+        value, expected,
+        "filtered schema must be the kind definition"
+    );
+    assert_eq!(
+        value["$id"],
+        "contract:agent-wait/v0/agent-wait-message.schema.json#/$defs/liveWaitOutcome"
+    );
+    assert_eq!(value["type"], "object");
+    assert_eq!(
+        value["properties"]["message_type"]["const"],
+        "live_wait_outcome"
+    );
+    assert!(
+        value.get("$defs").is_some(),
+        "kind schema must keep referenced defs"
+    );
+    assert!(value.get("def").is_none());
     assert!(value.get("message_types").is_none());
+}
+
+#[test]
+fn schema_message_type_covers_all_six_kinds() {
+    for kind in MessageType::ALL {
+        let output = bin()
+            .args(["schema", "--message-type", kind.as_str()])
+            .output()
+            .expect("schema --message-type kind");
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "kind={} stderr={}",
+            kind.as_str(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let value: serde_json::Value =
+            serde_json::from_str(stdout.trim()).expect("schema stdout must be JSON");
+        let expected = bundled_message_schema(kind).expect("kind schema");
+        assert_eq!(value, expected, "kind={}", kind.as_str());
+        assert_eq!(
+            value["properties"]["message_type"]["const"],
+            kind.as_str(),
+            "kind={}",
+            kind.as_str()
+        );
+        assert_eq!(value["type"], "object");
+        assert!(value.get("$id").is_some());
+        assert!(value.get("properties").is_some());
+        assert!(value.get("$defs").is_some());
+    }
 }
 
 #[test]
