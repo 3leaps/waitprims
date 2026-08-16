@@ -1,7 +1,8 @@
 //! Core types, errors, and helpers for waitprims.
 //!
 //! Public JSON is exactly the six `agent-wait/v0` message kinds. Runtime-only
-//! types must not serialize as that contract.
+//! types, including caller-owned delivery/activation evidence, must not
+//! serialize as that contract.
 //!
 //! Contract admission is only [`validate_message`] / [`validate_raw_documents`].
 //! [`serde_json::from_str`] on [`AgentWaitMessage`] is not admission.
@@ -10,6 +11,7 @@ pub mod contract;
 pub mod digest;
 pub mod error;
 pub mod jcs;
+pub mod receipts;
 pub mod refs;
 pub mod rfc3339;
 pub mod types;
@@ -20,6 +22,7 @@ pub use contract::{
 };
 pub use digest::registration_digest;
 pub use error::{Error, NormativeReason, Result, ValidationError};
+pub use receipts::{attach_event_refs, ActivationEvidence, DeliveryEvidence};
 pub use refs::{ActorRef, CapabilityToken, IdToken, OpaqueRef, PredicateRef};
 pub use rfc3339::Timestamp;
 pub use types::{

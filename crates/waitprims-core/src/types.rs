@@ -1,7 +1,8 @@
 //! Public JSON types for the six `agent-wait/v0` message kinds.
 //!
 //! There is no `LiveWaitAck` type and no public `WaitSpec`. Delivery and
-//! activation appear only as opaque refs.
+//! activation appear only as optional opaque refs on events, or as
+//! caller-owned evidence types that are not wait-contract messages.
 
 use std::collections::BTreeMap;
 
@@ -70,6 +71,21 @@ pub enum MessageType {
 }
 
 impl MessageType {
+    /// The six admitted wire names, in declaration order.
+    pub const ALL: [Self; 6] = [
+        Self::RegistrationSet,
+        Self::LiveWaitRequest,
+        Self::LiveWaitOutcome,
+        Self::PollCycleRequest,
+        Self::PollCycleOutcome,
+        Self::PollCycleAck,
+    ];
+
+    /// Whether this kind is a wait result (`live_wait_outcome` or `poll_cycle_outcome`).
+    pub fn is_wait_result(self) -> bool {
+        matches!(self, Self::LiveWaitOutcome | Self::PollCycleOutcome)
+    }
+
     /// Wire name.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -290,7 +306,10 @@ pub struct PollCycleRequest {
     pub fairness_cursor: IdToken,
     /// Per-registration acknowledged anchors. Empty on the first cycle.
     pub acknowledged_anchors: BTreeMap<String, Anchor>,
-    /// Activation reference. Opaque; never an inline body.
+    /// Request-cited activation. Opaque; never an inline body.
+    ///
+    /// This is not copied onto observed events and does not mean the
+    /// waiter activated or the agent acted.
     pub activation_ref: OpaqueRef,
     /// Cycle identifier.
     pub cycle_id: IdToken,
@@ -517,11 +536,31 @@ pub struct WaitEvent {
     /// Structured payload reference.
     pub payload: PayloadRef,
     /// Optional delivery reference. Opaque; never an inline body.
+    ///
+    /// Presence does not mean the agent acted or the waiter handled the
+    /// event. It does not change `outcome_kind`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delivery_ref: Option<OpaqueRef>,
     /// Optional activation reference. Opaque; never an inline body.
+    ///
+    /// Presence does not mean the agent acted or the waiter handled the
+    /// event. It does not change `outcome_kind`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub activation_ref: Option<OpaqueRef>,
+}
+
+impl WaitEvent {
+    /// Attach optional opaque refs. Does not change wait `outcome_kind`.
+    ///
+    /// Presence never means the agent acted or the waiter handled the event.
+    pub fn attach_refs(
+        &mut self,
+        delivery_ref: Option<OpaqueRef>,
+        activation_ref: Option<OpaqueRef>,
+    ) {
+        self.delivery_ref = delivery_ref;
+        self.activation_ref = activation_ref;
+    }
 }
 
 /// Coverage arm for one registration.
@@ -575,6 +614,19 @@ pub enum OutcomeKind {
 }
 
 impl OutcomeKind {
+    /// The nine admitted `outcome_kind` values.
+    pub const ALL: [Self; 9] = [
+        Self::Events,
+        Self::NoChange,
+        Self::LogicalDeadman,
+        Self::Partial,
+        Self::Cancelled,
+        Self::CoverageDegraded,
+        Self::Refused,
+        Self::ReauthenticationRequired,
+        Self::Failed,
+    ];
+
     /// Wire name.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -649,15 +701,32 @@ mod tests {
 
     #[test]
     fn six_kinds_only_no_live_wait_ack_variant() {
-        let names = [
-            MessageType::RegistrationSet.as_str(),
-            MessageType::LiveWaitRequest.as_str(),
-            MessageType::LiveWaitOutcome.as_str(),
-            MessageType::PollCycleRequest.as_str(),
-            MessageType::PollCycleOutcome.as_str(),
-            MessageType::PollCycleAck.as_str(),
-        ];
+        let names: Vec<_> = MessageType::ALL.iter().map(|kind| kind.as_str()).collect();
         assert_eq!(names.len(), 6);
         assert!(!names.contains(&"live_wait_ack"));
+        assert!(!names.contains(&"delivery"));
+        assert!(!names.contains(&"activation"));
+        assert!(MessageType::LiveWaitOutcome.is_wait_result());
+        assert!(MessageType::PollCycleOutcome.is_wait_result());
+        assert!(!MessageType::PollCycleRequest.is_wait_result());
+    }
+
+    #[test]
+    fn nine_outcome_kinds_exactly() {
+        let names: Vec<_> = OutcomeKind::ALL.iter().map(|kind| kind.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "events",
+                "no_change",
+                "logical_deadman",
+                "partial",
+                "cancelled",
+                "coverage_degraded",
+                "refused",
+                "reauthentication_required",
+                "failed",
+            ]
+        );
     }
 }

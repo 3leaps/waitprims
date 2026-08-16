@@ -36,6 +36,8 @@ const BACKOFF_MS: &[u64] = &[50, 100, 200, 400, 800, 1000];
 /// runner drops binds; it does not await [`Observer::cancel`]. Emits a
 /// `live_wait_outcome` body. Callers serialize
 /// [`waitprims_core::AgentWaitMessage::LiveWaitOutcome`] for the wire.
+/// Observed events keep their own optional `delivery_ref` / `activation_ref`;
+/// a match does not invent deliver/activate evidence.
 pub async fn run_first_match<O, C>(
     set: &RegistrationSet,
     request: &LiveWaitRequest,

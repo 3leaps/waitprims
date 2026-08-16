@@ -175,7 +175,8 @@ pub fn live_wait_request() -> LiveWaitRequest {
     }
 }
 
-/// Scripted source event. `delivery_ref` / `activation_ref` stay unset.
+/// Scripted source event. `delivery_ref` / `activation_ref` stay unset so
+/// a match cannot be mistaken for deliver/activate evidence.
 pub fn wait_event(registration_id: &str, method_id: &str, event_id: &str, at: &str) -> WaitEvent {
     WaitEvent {
         event_id: IdToken::new(event_id),

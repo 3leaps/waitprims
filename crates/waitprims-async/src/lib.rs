@@ -5,7 +5,8 @@
 //!
 //! Public JSON remains exactly the six `agent-wait/v0` message kinds.
 //! The observer seam (bind / next / cancel) is a runtime interface, not a
-//! wire type.
+//! wire type. Delivery and activation stay caller-owned or opaque refs;
+//! runners do not collapse them into match.
 
 mod cancel;
 mod clock;
