@@ -8,10 +8,11 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use tracing::info;
-use waitprims_async::{run_first_match, Cancel};
+use waitprims_async::{run_first_match, run_poll_cycle, Cancel};
 use waitprims_core::{
     resolve_bundled, validate_message, validate_raw_documents, AgentWaitMessage, Error,
-    LiveWaitRequest, RegistrationSet, ValidationError, CAPABILITY, PINNED_CRUCIBLE_SHA,
+    LiveWaitRequest, PollCycleRequest, RegistrationSet, ValidationError, CAPABILITY,
+    PINNED_CRUCIBLE_SHA,
 };
 use waitprims_testkit::{FakeClock, Script, ScriptedObserver};
 
@@ -55,7 +56,17 @@ enum Command {
         script: PathBuf,
     },
     /// Replay a scripted poll cycle.
-    Poll,
+    Poll {
+        /// Admitted `registration_set` JSON file.
+        #[arg(long, value_name = "PATH")]
+        registration_set: PathBuf,
+        /// Admitted `poll_cycle_request` JSON file.
+        #[arg(long, value_name = "PATH")]
+        request: PathBuf,
+        /// Local scripted events JSON file.
+        #[arg(long, value_name = "PATH")]
+        script: PathBuf,
+    },
     /// Print bundled schema identifiers.
     Schema,
 }
@@ -140,11 +151,20 @@ Diagnostic CLI. The library is the product; there is no daemon.",
                 ExitCode::from(1)
             }
         },
-        Some(Command::Poll) => {
-            info!(command = "poll", "subcommand is not implemented yet");
-            eprintln!("waitprims poll: not implemented yet");
-            ExitCode::from(1)
-        }
+        Some(Command::Poll {
+            registration_set,
+            request,
+            script,
+        }) => match run_poll(&registration_set, &request, &script) {
+            Ok(json) => {
+                println!("{json}");
+                ExitCode::SUCCESS
+            }
+            Err(err) => {
+                eprintln!("waitprims poll: {err}");
+                ExitCode::from(1)
+            }
+        },
     }
 }
 
@@ -189,6 +209,70 @@ fn run_wait(set_path: &Path, request_path: &Path, script_path: &Path) -> Result<
         validate_message(&json)?;
         Ok(json)
     })
+}
+
+fn run_poll(set_path: &Path, request_path: &Path, script_path: &Path) -> Result<String, Error> {
+    reject_non_local_path(set_path)?;
+    reject_non_local_path(request_path)?;
+    reject_non_local_path(script_path)?;
+    let set_raw = read_raw(set_path)?;
+    let request_raw = read_raw(request_path)?;
+    let script_raw = read_raw(script_path)?;
+    let admitted = validate_raw_documents([&set_raw, &request_raw])?;
+    let (set, request) = take_set_and_poll_request(admitted)?;
+    let script = Script::from_json(&script_raw)?;
+    for event in &script.events {
+        if !set
+            .registrations
+            .iter()
+            .any(|reg| reg.registration_id.as_str() == event.registration_id.as_str())
+        {
+            return Err(
+                ValidationError::new("/events/registration_id", "unknown_registration").into(),
+            );
+        }
+    }
+    info!("running scripted poll cycle");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .map_err(|_| Error::Contract {
+            path: "runtime",
+            constraint: "init",
+        })?;
+    runtime.block_on(async {
+        let clock = FakeClock::auto(request.created_at.clone());
+        let observer = ScriptedObserver::new(script, clock.clone());
+        let cancel = Cancel::new();
+        let outcome = run_poll_cycle(&set, &request, &observer, &clock, &cancel).await?;
+        let kind = outcome.outcome_kind.as_str();
+        info!(outcome_kind = kind, "emitted poll_cycle_outcome");
+        let message = AgentWaitMessage::PollCycleOutcome(outcome);
+        let json = serde_json::to_string(&message).map_err(|_| Error::MalformedJson)?;
+        validate_message(&json)?;
+        Ok(json)
+    })
+}
+
+fn take_set_and_poll_request(
+    admitted: Vec<waitprims_core::AdmittedMessage>,
+) -> Result<(RegistrationSet, PollCycleRequest), Error> {
+    let mut set = None;
+    let mut request = None;
+    for message in admitted {
+        match message.into_inner() {
+            AgentWaitMessage::RegistrationSet(value) => set = Some(value),
+            AgentWaitMessage::PollCycleRequest(value) => request = Some(value),
+            _ => {
+                return Err(ValidationError::new("/message_type", "unexpected_kind").into());
+            }
+        }
+    }
+    let set =
+        set.ok_or_else(|| ValidationError::new("/message_type", "registration_set_required"))?;
+    let request = request
+        .ok_or_else(|| ValidationError::new("/message_type", "poll_cycle_request_required"))?;
+    Ok((set, request))
 }
 
 fn take_set_and_request(

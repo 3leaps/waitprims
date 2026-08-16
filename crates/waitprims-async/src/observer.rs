@@ -36,6 +36,21 @@ pub enum Observation {
         /// Stable reason code for a `failed` outcome.
         reason_code: waitprims_core::IdToken,
     },
+    /// Provider outage on this arm. Not a clean `no_change` / `logical_deadman`.
+    Outage {
+        /// Stable reason code for the outage arm.
+        reason_code: waitprims_core::IdToken,
+    },
+    /// The exclusive cursor is uncertain. Not a clean complete.
+    CursorUncertain {
+        /// Stable reason code for the uncertain arm.
+        reason_code: waitprims_core::IdToken,
+    },
+    /// The arm is degraded. Not a clean `no_change` / `logical_deadman`.
+    Degraded {
+        /// Stable reason code for the degraded arm.
+        reason_code: waitprims_core::IdToken,
+    },
 }
 
 /// Observe registrations until the wait completes or the bind is dropped.
@@ -63,7 +78,18 @@ pub trait Observer: Send + Sync {
     ///
     /// Used to collect same-instant ties and to prefer a ready event over a
     /// deadman when both fire at the same logical time. Default: none.
+    ///
+    /// A consuming implementation must pair every dequeue with
+    /// [`Self::restore_ready`]. There is no silent drop path.
     fn poll_ready(&self, _bind: &Self::Bind) -> Option<Observation> {
         None
     }
+
+    /// Put a consumed observation back so a later cycle can replay it.
+    ///
+    /// Required. The runner calls this for every rejected or deferred
+    /// owned observation, whether it came from [`Self::poll_ready`] or
+    /// [`Self::next`]. Implementations that never dequeue from
+    /// [`Self::poll_ready`] may no-op, but the method cannot be omitted.
+    fn restore_ready(&self, bind: &Self::Bind, obs: Observation);
 }

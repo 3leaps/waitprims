@@ -298,7 +298,12 @@ fn decide(
         match obs {
             Observation::Event(event) => events.push((*idx, event.as_ref().clone())),
             Observation::Overflow => overflow = true,
-            Observation::Failed { reason_code } => failed = Some(reason_code.as_str().to_string()),
+            Observation::Failed { reason_code }
+            | Observation::Outage { reason_code }
+            | Observation::CursorUncertain { reason_code }
+            | Observation::Degraded { reason_code } => {
+                failed = Some(reason_code.as_str().to_string());
+            }
             Observation::Idle => {}
         }
     }
