@@ -1,5 +1,10 @@
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+
+use waitprims_async::{run_first_match, run_poll_cycle, Cancel};
+use waitprims_core::{validate_message, validate_raw_documents, AgentWaitMessage, MessageType};
+use waitprims_testkit::{FakeClock, Script, ScriptedObserver};
 
 fn bin() -> Command {
     Command::new(env!("CARGO_BIN_EXE_waitprims"))
@@ -11,6 +16,23 @@ fn vendor_root() -> PathBuf {
 
 fn fixture_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/initial-case")
+}
+
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+fn write_temp_json(label: &str, body: &[u8]) -> PathBuf {
+    let path = std::env::temp_dir().join(format!(
+        "waitprims-cli-{label}-{}-{}.json",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time")
+            .as_nanos()
+    ));
+    std::fs::write(&path, body).expect("write temp json");
+    path
 }
 
 fn validate_input(target: &Path) -> std::process::Output {
@@ -82,9 +104,82 @@ fn schema_prints_capability_and_pin() {
     let output = bin().arg("schema").output().expect("run schema");
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("contract: agent-wait/v0"));
-    assert!(stdout.contains("agent-wait-message.schema.json"));
-    assert!(stdout.contains("f1912957cde19b2b1e7809e430cc28dc417287cc"));
+    let value: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("schema stdout must be JSON");
+    assert_eq!(value["capability"], "contract: agent-wait/v0");
+    assert_eq!(value["entry_schema"], "agent-wait-message.schema.json");
+    assert_eq!(
+        value["crucible_sha"],
+        "f1912957cde19b2b1e7809e430cc28dc417287cc"
+    );
+    let kinds = value["message_types"]
+        .as_array()
+        .expect("schema must list the six kinds");
+    let names: Vec<_> = kinds
+        .iter()
+        .map(|item| item["message_type"].as_str().expect("message_type"))
+        .collect();
+    assert_eq!(
+        names,
+        MessageType::ALL
+            .iter()
+            .map(|kind| kind.as_str())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn schema_help_shows_message_type_flag() {
+    let output = bin()
+        .args(["schema", "--help"])
+        .output()
+        .expect("schema --help");
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("--message-type"),
+        "schema --help must show --message-type: {stdout}"
+    );
+}
+
+#[test]
+fn schema_message_type_prints_one_kind() {
+    let output = bin()
+        .args(["schema", "--message-type", "live_wait_outcome"])
+        .output()
+        .expect("schema --message-type");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let value: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("schema stdout must be JSON");
+    assert_eq!(value["message_type"], "live_wait_outcome");
+    assert_eq!(value["def"], "liveWaitOutcome");
+    assert!(value.get("message_types").is_none());
+}
+
+#[test]
+fn schema_unknown_message_type_exits_one() {
+    let output = bin()
+        .args(["schema", "--message-type", "live_wait_ack"])
+        .output()
+        .expect("schema invented kind");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("undeclared_message_type"),
+        "expected undeclared_message_type: {stderr}"
+    );
 }
 
 #[test]
@@ -551,4 +646,289 @@ fn wait_rejects_dash_script() {
         stderr.contains("local_path_required"),
         "expected local_path_required: {stderr}"
     );
+}
+
+#[test]
+fn poll_rejects_dash_script() {
+    let root = fixture_root();
+    let output = bin()
+        .args([
+            "poll",
+            "--registration-set",
+            root.join("registration_set.json").to_str().unwrap(),
+            "--request",
+            root.join("poll_cycle_request.json").to_str().unwrap(),
+            "--script",
+            "-",
+        ])
+        .output()
+        .expect("poll dash script");
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("local_path_required"),
+        "expected local_path_required: {stderr}"
+    );
+}
+
+#[test]
+fn wait_script_dash_does_not_read_stdin() {
+    let root = fixture_root();
+    let script = std::fs::read(root.join("live.json")).expect("live script");
+    let mut child = bin()
+        .args([
+            "wait",
+            "--registration-set",
+            root.join("registration_set.json").to_str().unwrap(),
+            "--request",
+            root.join("live_wait_request.json").to_str().unwrap(),
+            "--script",
+            "-",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn wait");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin")
+        .write_all(&script)
+        .expect("pipe script");
+    let output = child.wait_with_output().expect("wait dash stdin");
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("live_wait_outcome"),
+        "piped script must not become an outcome: {stdout}"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("local_path_required"),
+        "expected local_path_required: {stderr}"
+    );
+}
+
+#[test]
+fn validate_rejects_urn_and_file_uri_inputs() {
+    for raw in [
+        "urn:example:waitprims:message",
+        "file:/tmp/waitprims-message.json",
+        "file:///tmp/waitprims-message.json",
+    ] {
+        let output = validate_input(Path::new(raw));
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "input={raw} stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("local_path_required"),
+            "input={raw} expected local_path_required: {stderr}"
+        );
+        assert!(
+            !stderr.contains("tmp/waitprims-message"),
+            "input={raw} leaked URI path: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn wait_rejects_urn_and_file_script_paths() {
+    let root = fixture_root();
+    for raw in ["urn:example:waitprims:script", "file:/tmp/script.json"] {
+        let output = bin()
+            .args([
+                "wait",
+                "--registration-set",
+                root.join("registration_set.json").to_str().unwrap(),
+                "--request",
+                root.join("live_wait_request.json").to_str().unwrap(),
+                "--script",
+                raw,
+            ])
+            .output()
+            .expect("wait uri script");
+        assert_eq!(output.status.code(), Some(1), "script={raw}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("local_path_required"),
+            "script={raw} expected local_path_required: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn validate_relative_fixture_path_exits_zero() {
+    let output = bin()
+        .args([
+            "validate",
+            "--input",
+            "fixtures/initial-case/registration_set.json",
+        ])
+        .current_dir(workspace_root())
+        .output()
+        .expect("validate relative fixture");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn wait_missing_file_exits_one() {
+    let root = fixture_root();
+    let output = bin()
+        .args([
+            "wait",
+            "--registration-set",
+            root.join("registration_set.json").to_str().unwrap(),
+            "--request",
+            root.join("live_wait_request.json").to_str().unwrap(),
+            "--script",
+            root.join("missing-script.json").to_str().unwrap(),
+        ])
+        .output()
+        .expect("wait missing file");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[tokio::test]
+async fn wait_initial_case_matches_library_and_validates() {
+    let root = fixture_root();
+    let expected = library_live_outcome(&root).await;
+    let output = bin()
+        .args([
+            "wait",
+            "--registration-set",
+            root.join("registration_set.json").to_str().unwrap(),
+            "--request",
+            root.join("live_wait_request.json").to_str().unwrap(),
+            "--script",
+            root.join("live.json").to_str().unwrap(),
+        ])
+        .output()
+        .expect("run wait");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let got: serde_json::Value = serde_json::from_slice(&output.stdout).expect("wait stdout JSON");
+    assert_eq!(got, expected, "CLI wait must match library golden");
+    let tmp = write_temp_json("live-outcome", &output.stdout);
+    let validated = validate_input(&tmp);
+    let _ = std::fs::remove_file(&tmp);
+    assert_eq!(
+        validated.status.code(),
+        Some(0),
+        "validate of wait JSON failed: stderr={}",
+        String::from_utf8_lossy(&validated.stderr)
+    );
+}
+
+#[tokio::test]
+async fn poll_initial_case_matches_library_and_validates() {
+    let root = fixture_root();
+    let expected = library_poll_outcome(&root).await;
+    let output = bin()
+        .args([
+            "poll",
+            "--registration-set",
+            root.join("registration_set.json").to_str().unwrap(),
+            "--request",
+            root.join("poll_cycle_request.json").to_str().unwrap(),
+            "--script",
+            root.join("poll.json").to_str().unwrap(),
+        ])
+        .output()
+        .expect("run poll");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let got: serde_json::Value = serde_json::from_slice(&output.stdout).expect("poll stdout JSON");
+    assert_eq!(got, expected, "CLI poll must match library golden");
+    let tmp = write_temp_json("poll-outcome", &output.stdout);
+    let validated = validate_input(&tmp);
+    let _ = std::fs::remove_file(&tmp);
+    assert_eq!(
+        validated.status.code(),
+        Some(0),
+        "validate of poll JSON failed: stderr={}",
+        String::from_utf8_lossy(&validated.stderr)
+    );
+}
+
+async fn library_live_outcome(root: &Path) -> serde_json::Value {
+    let set_raw = std::fs::read_to_string(root.join("registration_set.json")).expect("set");
+    let request_raw =
+        std::fs::read_to_string(root.join("live_wait_request.json")).expect("live request");
+    let script_raw = std::fs::read_to_string(root.join("live.json")).expect("live script");
+    let admitted = validate_raw_documents([&set_raw, &request_raw]).expect("admit live pair");
+    let mut set = None;
+    let mut request = None;
+    for message in admitted {
+        match message.into_inner() {
+            AgentWaitMessage::RegistrationSet(value) => set = Some(value),
+            AgentWaitMessage::LiveWaitRequest(value) => request = Some(value),
+            other => panic!("unexpected {:?}", other.message_type()),
+        }
+    }
+    let set = set.expect("registration_set");
+    let request = request.expect("live_wait_request");
+    let script = Script::from_json(&script_raw).expect("script");
+    let clock = FakeClock::auto(request.created_at.clone());
+    let observer = ScriptedObserver::new(script, clock.clone());
+    let outcome = run_first_match(&set, &request, &observer, &clock, &Cancel::new())
+        .await
+        .expect("library live");
+    let message = AgentWaitMessage::LiveWaitOutcome(outcome);
+    let json = serde_json::to_string(&message).expect("serialize");
+    validate_message(&json).expect("library live must admit");
+    serde_json::from_str(&json).expect("library live JSON")
+}
+
+async fn library_poll_outcome(root: &Path) -> serde_json::Value {
+    let set_raw = std::fs::read_to_string(root.join("registration_set.json")).expect("set");
+    let request_raw =
+        std::fs::read_to_string(root.join("poll_cycle_request.json")).expect("poll request");
+    let script_raw = std::fs::read_to_string(root.join("poll.json")).expect("poll script");
+    let admitted = validate_raw_documents([&set_raw, &request_raw]).expect("admit poll pair");
+    let mut set = None;
+    let mut request = None;
+    for message in admitted {
+        match message.into_inner() {
+            AgentWaitMessage::RegistrationSet(value) => set = Some(value),
+            AgentWaitMessage::PollCycleRequest(value) => request = Some(value),
+            other => panic!("unexpected {:?}", other.message_type()),
+        }
+    }
+    let set = set.expect("registration_set");
+    let request = request.expect("poll_cycle_request");
+    let script = Script::from_json(&script_raw).expect("script");
+    let clock = FakeClock::auto(request.created_at.clone());
+    let observer = ScriptedObserver::new(script, clock.clone());
+    let outcome = run_poll_cycle(&set, &request, &observer, &clock, &Cancel::new())
+        .await
+        .expect("library poll");
+    let message = AgentWaitMessage::PollCycleOutcome(outcome);
+    let json = serde_json::to_string(&message).expect("serialize");
+    validate_message(&json).expect("library poll must admit");
+    serde_json::from_str(&json).expect("library poll JSON")
 }

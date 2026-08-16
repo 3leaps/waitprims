@@ -97,6 +97,24 @@ impl MessageType {
             Self::PollCycleAck => "poll_cycle_ack",
         }
     }
+
+    /// Parse a wire `message_type`. Unknown names, including invented
+    /// kinds, are `None`.
+    pub fn parse(raw: &str) -> Option<Self> {
+        Self::ALL.iter().copied().find(|kind| kind.as_str() == raw)
+    }
+
+    /// Camel-case `$defs` name in the bundled entry schema.
+    pub fn schema_def_name(self) -> &'static str {
+        match self {
+            Self::RegistrationSet => "registrationSet",
+            Self::LiveWaitRequest => "liveWaitRequest",
+            Self::LiveWaitOutcome => "liveWaitOutcome",
+            Self::PollCycleRequest => "pollCycleRequest",
+            Self::PollCycleOutcome => "pollCycleOutcome",
+            Self::PollCycleAck => "pollCycleAck",
+        }
+    }
 }
 
 /// `registration_set` body.
@@ -709,6 +727,15 @@ mod tests {
         assert!(MessageType::LiveWaitOutcome.is_wait_result());
         assert!(MessageType::PollCycleOutcome.is_wait_result());
         assert!(!MessageType::PollCycleRequest.is_wait_result());
+        assert_eq!(
+            MessageType::parse("poll_cycle_ack"),
+            Some(MessageType::PollCycleAck)
+        );
+        assert_eq!(MessageType::parse("live_wait_ack"), None);
+        assert_eq!(
+            MessageType::LiveWaitOutcome.schema_def_name(),
+            "liveWaitOutcome"
+        );
     }
 
     #[test]

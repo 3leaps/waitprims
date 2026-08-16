@@ -71,9 +71,10 @@ waitprims --version
 waitprims validate --input <file-or-directory>
 waitprims wait --registration-set <file> --request <file> --script <file>
 waitprims poll --registration-set <file> --request <file> --script <file>
+waitprims schema [--message-type <message_type>]
 ```
 
-`validate --input` admits one message file or a directory set. `wait` resolves a cited registration set and first-matches a scripted observer. `poll` runs one bounded poll-cycle over the same set. JSON goes to stdout. Logs and errors go to stderr.
+`validate --input` admits one message file or a directory set. `wait` resolves a cited registration set and first-matches a scripted observer. `poll` runs one bounded poll-cycle over the same set. `schema` prints the pin and the six kinds. JSON goes to stdout. Logs and errors go to stderr. Scripts are local files; `--script -` is rejected.
 
 ## License
 
