@@ -1,4 +1,4 @@
-//! CP5 proofs: observe, wait result, and deliver/activate refs stay distinct.
+//! Proofs: observe, wait result, and deliver/activate refs stay distinct.
 
 use std::fs;
 use std::path::PathBuf;

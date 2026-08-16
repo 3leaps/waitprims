@@ -1,4 +1,4 @@
-//! CP4 proofs: poll-cycle coverage, fairness, ack, replay, starvation, dirty arms.
+//! Proofs: poll-cycle coverage, fairness, ack, replay, starvation, dirty arms.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;

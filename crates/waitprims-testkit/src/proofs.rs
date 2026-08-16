@@ -1,4 +1,4 @@
-//! CP3 proofs: first-match, deadline, cancel, drop, ties, overflow, starvation.
+//! Proofs: first-match, deadline, cancel, drop, ties, overflow, starvation.
 
 use waitprims_async::{run_first_match, Cancel, TIE_RULE};
 use waitprims_core::{validate_message, AgentWaitMessage, LiveWaitOutcome, OutcomeKind, Timestamp};

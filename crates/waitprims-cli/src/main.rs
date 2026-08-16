@@ -10,9 +10,9 @@ use clap::{Parser, Subcommand, ValueEnum};
 use tracing::info;
 use waitprims_async::{run_first_match, run_poll_cycle, Cancel};
 use waitprims_core::{
-    resolve_bundled, validate_message, validate_raw_documents, AgentWaitMessage, Error,
-    LiveWaitRequest, PollCycleRequest, RegistrationSet, ValidationError, CAPABILITY,
-    PINNED_CRUCIBLE_SHA,
+    bundled_entry_schema, bundled_message_schema, validate_message, validate_raw_documents,
+    AgentWaitMessage, Error, LiveWaitRequest, MessageType, PollCycleRequest, RegistrationSet,
+    ValidationError,
 };
 use waitprims_testkit::{FakeClock, Script, ScriptedObserver};
 
@@ -67,8 +67,12 @@ enum Command {
         #[arg(long, value_name = "PATH")]
         script: PathBuf,
     },
-    /// Print bundled schema identifiers.
-    Schema,
+    /// Print the bundled JSON Schema, or one message kind's definition.
+    Schema {
+        /// Restrict output to one of the six `message_type` values.
+        #[arg(long, value_name = "KIND")]
+        message_type: Option<String>,
+    },
 }
 
 #[derive(ValueEnum, Clone, Debug, PartialEq, Eq)]
@@ -114,7 +118,7 @@ Diagnostic CLI. The library is the product; there is no daemon.",
             );
             ExitCode::SUCCESS
         }
-        Some(Command::Schema) => match print_schema() {
+        Some(Command::Schema { message_type }) => match print_schema(message_type.as_deref()) {
             Ok(()) => ExitCode::SUCCESS,
             Err(err) => {
                 eprintln!("waitprims schema: {err}");
@@ -296,16 +300,17 @@ fn take_set_and_request(
     Ok((set, request))
 }
 
-fn print_schema() -> Result<(), waitprims_core::Error> {
-    let resolved = resolve_bundled(CAPABILITY)?;
-    println!(
-        "{}",
-        serde_json::json!({
-            "capability": resolved.capability,
-            "entry_schema": resolved.entry_schema_name,
-            "crucible_sha": PINNED_CRUCIBLE_SHA
-        })
-    );
+fn print_schema(message_type: Option<&str>) -> Result<(), waitprims_core::Error> {
+    let schema = match message_type {
+        None => bundled_entry_schema()?,
+        Some(raw) => {
+            let kind = MessageType::parse(raw)
+                .ok_or_else(|| ValidationError::new("/message_type", "undeclared_message_type"))?;
+            bundled_message_schema(kind)?
+        }
+    };
+    let json = serde_json::to_string(&schema).map_err(|_| Error::MalformedJson)?;
+    println!("{json}");
     Ok(())
 }
 
@@ -325,7 +330,26 @@ fn reject_non_local_path(path: &Path) -> Result<(), waitprims_core::Error> {
 }
 
 fn looks_like_uri(raw: &str) -> bool {
-    raw.contains("://")
+    let Some((scheme, rest)) = raw.split_once(':') else {
+        return false;
+    };
+    if !is_uri_scheme(scheme) {
+        return false;
+    }
+    // A single-letter scheme plus a path separator is a drive, not a URI.
+    if scheme.len() == 1 && (rest.starts_with('/') || rest.starts_with('\\')) {
+        return false;
+    }
+    true
+}
+
+fn is_uri_scheme(scheme: &str) -> bool {
+    let mut chars = scheme.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    first.is_ascii_alphabetic()
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
 }
 
 fn load_documents(path: &Path) -> Result<Vec<String>, waitprims_core::Error> {
@@ -369,4 +393,40 @@ fn collect_json(dir: &Path, files: &mut Vec<PathBuf>) -> Result<(), waitprims_co
 
 fn read_raw(path: &Path) -> Result<String, waitprims_core::Error> {
     fs::read_to_string(path).map_err(|_| waitprims_core::Error::MalformedJson)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{looks_like_uri, reject_non_local_path};
+    use std::path::Path;
+
+    #[test]
+    fn ordinary_paths_are_local() {
+        for raw in [
+            "fixtures/initial-case/live.json",
+            "./registration_set.json",
+            "../fixtures/initial-case/poll.json",
+            "/var/tmp/waitprims/request.json",
+            r"C:\temp\request.json",
+        ] {
+            assert!(!looks_like_uri(raw), "{raw} must remain a filesystem path");
+            reject_non_local_path(Path::new(raw)).expect(raw);
+        }
+    }
+
+    #[test]
+    fn uri_shaped_values_are_rejected() {
+        for raw in [
+            "https://example.invalid/message.json",
+            "http://127.0.0.1/message.json",
+            "urn:example:waitprims:message",
+            "file:/tmp/message.json",
+            "file:///tmp/message.json",
+            "mailto:ops@example.invalid",
+        ] {
+            assert!(looks_like_uri(raw), "{raw} must look like a URI");
+            reject_non_local_path(Path::new(raw)).expect_err(raw);
+        }
+        reject_non_local_path(Path::new("-")).expect_err("stdin dash");
+    }
 }
