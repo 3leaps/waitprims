@@ -23,6 +23,9 @@ pub trait BindHandle: Send + Sync + Unpin {
 }
 
 /// One observation from a bound registration.
+///
+/// An observation is a candidate (payload by ref) or an arm signal. It is
+/// not a wait result and is not an `agent-wait/v0` message kind.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Observation {
     /// An accepted source event.
@@ -51,6 +54,13 @@ pub enum Observation {
         /// Stable reason code for the degraded arm.
         reason_code: waitprims_core::IdToken,
     },
+}
+
+impl Observation {
+    /// An observation is never itself a wait result.
+    pub const fn is_wait_result(&self) -> bool {
+        false
+    }
 }
 
 /// Observe registrations until the wait completes or the bind is dropped.

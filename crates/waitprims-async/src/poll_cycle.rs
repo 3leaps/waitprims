@@ -7,6 +7,7 @@
 //!
 //! Acknowledged anchors are applied at bind. Pending binds never mint a
 //! provider cursor. Collection stops when representable bounds are exhausted.
+//! Request `activation_ref` is not copied onto observed events.
 
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
@@ -579,7 +580,7 @@ fn record_ready<O: Observer>(
             visits.insert(idx, defer_ready(observer, bind, obs));
             continue;
         }
-        visits.insert(idx, visit_from(observer, bind, request, budget, obs));
+        visits.insert(idx, visit_from(observer, bind, budget, obs));
     }
     for (idx, obs) in ready_map {
         restore_observation(observer, binds.get(idx).and_then(|bind| bind.as_ref()), obs);
@@ -589,20 +590,18 @@ fn record_ready<O: Observer>(
 fn visit_from<O: Observer>(
     observer: &O,
     bind: Option<&O::Bind>,
-    request: &PollCycleRequest,
     budget: &mut CollectBudget,
     obs: Observation,
 ) -> ArmVisit {
     match obs {
         Observation::Event(event) => {
-            let original = *event;
-            let stamped = stamp_activation(original.clone(), request);
-            if !budget.try_take(&stamped) {
-                return defer_ready(observer, bind, Observation::Event(Box::new(original)));
+            let event = *event;
+            if !budget.try_take(&event) {
+                return defer_ready(observer, bind, Observation::Event(Box::new(event)));
             }
-            let mut events = vec![stamped];
+            let mut events = vec![event];
             let truncated = bind
-                .map(|bind| drain_ready(observer, bind, request, budget, &mut events))
+                .map(|bind| drain_ready(observer, bind, budget, &mut events))
                 .unwrap_or(false);
             if truncated {
                 ArmVisit::Saturated(events)
@@ -626,7 +625,6 @@ fn visit_from<O: Observer>(
 fn drain_ready<O: Observer>(
     observer: &O,
     bind: &O::Bind,
-    request: &PollCycleRequest,
     budget: &mut CollectBudget,
     events: &mut Vec<WaitEvent>,
 ) -> bool {
@@ -643,17 +641,12 @@ fn drain_ready<O: Observer>(
         };
         match obs {
             Observation::Event(event) => {
-                let original = *event;
-                let stamped = stamp_activation(original.clone(), request);
-                if !budget.try_take(&stamped) {
-                    restore_observation(
-                        observer,
-                        Some(bind),
-                        Observation::Event(Box::new(original)),
-                    );
+                let event = *event;
+                if !budget.try_take(&event) {
+                    restore_observation(observer, Some(bind), Observation::Event(Box::new(event)));
                     return true;
                 }
-                events.push(stamped);
+                events.push(event);
             }
             Observation::Overflow => return true,
             other => {
@@ -662,13 +655,6 @@ fn drain_ready<O: Observer>(
             }
         }
     }
-}
-
-fn stamp_activation(mut event: WaitEvent, request: &PollCycleRequest) -> WaitEvent {
-    if event.activation_ref.is_none() {
-        event.activation_ref = Some(request.activation_ref.clone());
-    }
-    event
 }
 
 fn deadline_reached(request: &PollCycleRequest, now: &Timestamp) -> bool {

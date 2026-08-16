@@ -8,6 +8,7 @@ mod case;
 mod clock;
 mod observer;
 mod script;
+mod seam;
 
 pub use bind::{exclusive_head_anchor, resolve_start_at_bind, BindTracker, TrackedBind};
 pub use case::{
@@ -17,6 +18,7 @@ pub use case::{
 pub use clock::FakeClock;
 pub use observer::{EndlessReadyObserver, IdleObserver, ScriptedObserver};
 pub use script::Script;
+pub use seam::ScriptedReceipts;
 pub use waitprims_async::{
     event_surface_bytes, run_poll_cycle, BindHandle, Cancel, Clock, Error, Observation, Observer,
     Result, TIE_RULE,
@@ -26,3 +28,5 @@ pub use waitprims_async::{
 mod poll_proofs;
 #[cfg(test)]
 mod proofs;
+#[cfg(test)]
+mod receipt_proofs;
