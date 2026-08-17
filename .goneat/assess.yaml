@@ -3,8 +3,8 @@
 # This config handles GitHub Actions. YAML format is yamlfmt (Apache-2.0)
 # via .yamlfmt. Do not enable yamllint (GPL-3.0-or-later).
 #
-# NOTE: goneat does not have native Rust support. Do not add
-# goneat-tools-runner or GPL tools to this tree.
+# goneat Rust cooling is not wired. License/source gate is deny.toml.
+# Do not add yamllint or GPL tools.
 version: 1
 lint:
   # GitHub Actions linting (actionlint is MIT)

@@ -1,0 +1,72 @@
+# goneat Dependencies Policy Configuration
+# waitprims - GPL-free wait primitives library
+#
+# Estate-standard intent. Cooling is policy until goneat wires
+# RustAnalyzer to cooling.Checker. `languages: rust` does not enable
+# crate-age checks; `--cooling` currently passes without them.
+# Real license/source gate today is deny.toml. Do not claim this file
+# enforces crate age. syft/grype are a separate vuln/SBOM gate.
+# YAML format is yamlfmt (Apache-2.0) via .yamlfmt. Do not enable yamllint.
+version: v1
+# License compliance policy
+# Aligned with deny.toml. Permissive licenses only; no MPL/CDDL forbid.
+licenses:
+  forbidden:
+    - GPL-2.0
+    - GPL-3.0
+    - AGPL-3.0
+    - LGPL-2.1
+    - LGPL-3.0
+  allowed:
+    - MIT
+    - Apache-2.0
+    - BSD-2-Clause
+    - BSD-3-Clause
+    - ISC
+    - Zlib
+    - Unlicense
+    - CC0-1.0
+    - BSL-1.0
+    - Unicode-3.0
+    - Unicode-DFS-2016
+    - MIT-0
+# Supply chain security (cooling policy)
+# Intent only for Rust until goneat wires CheckCooling. Do not set
+# min_downloads_recent: crates.io "recent" is per-version lifetime
+# downloads and footguns a fresh version of a popular crate.
+# Cooling is age, not license: do not except all MIT/Apache crates.
+cooling:
+  enabled: true
+  min_age_days: 7
+  min_downloads: 100
+  alert_only: false
+  grace_period_days: 3
+  exceptions:
+    - pattern: "github.com/3leaps/*"
+      reason: "Internal packages"
+    - pattern: "github.com/lanytehq/*"
+      reason: "Estate org packages"
+    - pattern: "github.com/fulmenhq/*"
+      reason: "Fulmen ecosystem packages"
+    - pattern: "github.com/birchton/*"
+      reason: "Estate org packages"
+    - pattern: "3leaps-*"
+      reason: "Estate crate names when Rust cooling is wired"
+    - pattern: "lanyte-*"
+      reason: "Estate crate names when Rust cooling is wired"
+    - pattern: "fulmen-*"
+      reason: "Estate crate names when Rust cooling is wired"
+    - pattern: "birchton-*"
+      reason: "Estate crate names when Rust cooling is wired"
+# Policy engine configuration
+policy_engine:
+  type: embedded
+# Language-specific settings
+languages:
+  - language: rust
+    paths:
+      - Cargo.toml
+      - crates/waitprims-core/Cargo.toml
+      - crates/waitprims-async/Cargo.toml
+      - crates/waitprims-testkit/Cargo.toml
+      - crates/waitprims-cli/Cargo.toml
