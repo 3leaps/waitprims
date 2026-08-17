@@ -1,13 +1,16 @@
 # waitprims CI
 #
 # Not one required 5-wide PR gate. The required gate is `fast` on
-# ubuntu-latest. Hosted and arm64 jobs are native smokes.
+# ubuntu-latest. Hosted smokes are three cells on every push/PR.
+# arm64 labs are two more cells, same-repo only, not required.
+# Fork PRs therefore see three native smokes, not five.
 #
-# Five cells (native per arch; no cross, no musl, no macOS Intel,
+# Hosted (every push/PR; no cross, no musl, no macOS Intel,
 # no goneat-tools-runner):
 #   ubuntu-latest              x86_64-unknown-linux-gnu
 #   macos-14                   aarch64-apple-darwin
 #   windows-latest             x86_64-pc-windows-msvc
+# arm64 labs (same-repo only):
 #   ubuntu-latest-arm64-s      aarch64-unknown-linux-gnu
 #   windows-latest-arm64-s     aarch64-pc-windows-msvc
 #
@@ -17,7 +20,8 @@
 #
 # FakeClock is logical. Same-instant / restore / poll-ack use contract
 # timestamps and registration-set order, not wall sleeps. Windows has
-# no EINTR, UDS, or signal-driven cancel; Cancel is a watch token.
+# no EINTR, UDS, signal-driven cancel, or Job Object claim; Cancel is
+# a watch token.
 #
 # rustc is workspace MSRV 1.88.0. Pin stays contract: agent-wait/v0 at
 # f1912957cde19b2b1e7809e430cc28dc417287cc.
@@ -58,6 +62,17 @@ jobs:
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: actionlint
+        env:
+          ACTIONLINT_VERSION: "1.7.12"
+        run: |
+          set -euo pipefail
+          tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          url="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${tarball}"
+          curl -fsSL -o "${RUNNER_TEMP}/actionlint.tgz" "${url}"
+          tar -xzf "${RUNNER_TEMP}/actionlint.tgz" -C "${RUNNER_TEMP}" actionlint
+          "${RUNNER_TEMP}/actionlint" -color
 
       - name: Test
         run: cargo test --workspace --locked

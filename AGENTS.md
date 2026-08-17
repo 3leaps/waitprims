@@ -84,6 +84,7 @@ MIT OR Apache-2.0. All dependencies must stay permissively licensed.
 | `crates/waitprims-testkit` | Deterministic fakes and scripted observers |
 | `crates/waitprims-cli` | Diagnostic binary `waitprims` |
 | `schemas/v0` | Vendored contract schemas |
+| `docs` | Short beginning: kinds, pin, FakeClock, cancel |
 | `fixtures` | Local extras |
 
 ## Contact

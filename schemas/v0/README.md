@@ -1,18 +1,20 @@
 # contract: agent-wait/v0
 
-Machine-readable companion schemas for the portable agent-wait contract.
+Vendored companion schemas for the portable agent-wait contract.
 
-The normative standard is
-[`docs/standards/agent-wait-contract.md`](../../../docs/standards/agent-wait-contract.md).
+This tree pins Crucible `f1912957cde19b2b1e7809e430cc28dc417287cc`.
+See [`PIN.md`](PIN.md). Do not invent a parallel schema here; interactions
+are the six `message_type` values in `agent-wait-message.schema.json`.
+
 These schemas provide the structural validation surface. Deadline ordering
 uses a fail-closed RFC3339 profile (no basic/week/ordinal dates, no
 missing seconds, no space separator, no colon-less offsets; leap seconds
 are rejected). Opaque-anchor identity, full outcome kinds, coverage
 cardinality, fairness, per-registration ack/retention, replay, bounds,
-authn/lease, and revision freeze are enforced by
-`scripts/validate-agent-wait-normative.sh` and proven able to fail by
-`scripts/test-agent-wait-controls.sh`. The checker fails closed on a
-missing, unreadable, empty, or malformed target.
+authn/lease, and revision freeze are enforced by `waitprims-core`
+admission (`validate_message` / `validate_raw_documents`) against this
+pin. The checker fails closed on a missing, unreadable, empty, or
+malformed target.
 
 The contract identity is the opaque capability token
 `contract: agent-wait/v0`. Consumers resolve that token through local

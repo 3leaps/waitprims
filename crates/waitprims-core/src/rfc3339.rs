@@ -420,6 +420,49 @@ mod tests {
     }
 
     #[test]
+    fn rfc3339_six_digit_compare_pads_truncates_and_normalizes_offsets() {
+        // Pad to six digits.
+        assert_eq!(
+            compare("2026-08-15T17:00:00.1Z", "2026-08-15T17:00:00.100000Z").unwrap(),
+            0
+        );
+        assert_eq!(
+            compare("2026-08-15T17:00:00.12Z", "2026-08-15T17:00:00.120000Z").unwrap(),
+            0
+        );
+        // Truncate past six digits; no rounding.
+        assert_eq!(
+            compare(
+                "2026-08-15T17:00:00.123456999Z",
+                "2026-08-15T17:00:00.123456000Z"
+            )
+            .unwrap(),
+            0
+        );
+        assert_eq!(
+            compare(
+                "2026-08-15T17:00:00.123456000Z",
+                "2026-08-15T17:00:00.123457000Z"
+            )
+            .unwrap(),
+            -1
+        );
+        // Offset + fraction normalize to the same UTC instant.
+        assert_eq!(
+            compare(
+                "2026-08-15T17:00:00.123456Z",
+                "2026-08-15T18:00:00.123456+01:00"
+            )
+            .unwrap(),
+            0
+        );
+        let left = Timestamp::parse("2026-08-15T17:00:00.1234567Z").unwrap();
+        let right = Timestamp::parse("2026-08-15T17:00:00.1234568Z").unwrap();
+        assert_eq!(left.compare(&right), 0);
+        assert_eq!(left, right);
+    }
+
+    #[test]
     fn one_millisecond_is_a_distinct_logical_instant() {
         // Contract timestamps stay distinct. FakeClock is logical; this is
         // not a wall-sleep uniqueness key.

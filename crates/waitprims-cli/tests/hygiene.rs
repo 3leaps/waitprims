@@ -18,10 +18,12 @@ fn tracked_public_files() -> Vec<PathBuf> {
             "-z",
             "README.md",
             "AGENTS.md",
+            "docs",
             "fixtures",
             "schemas/v0/README.md",
             "schemas/v0/PIN.md",
             "schemas/v0/rejects/README.md",
+            ".github/CI.md",
         ])
         .current_dir(&root)
         .output()

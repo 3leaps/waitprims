@@ -1,10 +1,14 @@
 //! Cooperative cancellation for a live wait.
+//!
+//! Portable watch token only. Not `EINTR`, not a signal, not a Windows
+//! Job Object.
 
 use tokio::sync::watch;
 
 /// Signaled cancellation for [`crate::run_first_match`].
 ///
 /// The token is cloneable. Triggering any clone cancels waiters on every clone.
+/// Windows uses this same watch path; there is no Job Object claim.
 #[derive(Clone, Debug)]
 pub struct Cancel {
     tx: watch::Sender<bool>,
