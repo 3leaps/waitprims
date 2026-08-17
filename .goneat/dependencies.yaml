@@ -1,0 +1,57 @@
+# goneat Dependencies Policy Configuration
+# waitprims - GPL-free wait primitives library
+#
+# This policy enforces license compliance and supply chain security.
+# See deny.toml for cargo-deny configuration (authoritative for Rust deps).
+# YAML format is yamlfmt (Apache-2.0) via .yamlfmt. Do not enable yamllint.
+version: v1
+# License compliance policy
+# Aligned with deny.toml. Permissive licenses only; no MPL/CDDL forbid.
+licenses:
+  forbidden:
+    - GPL-2.0
+    - GPL-3.0
+    - AGPL-3.0
+    - LGPL-2.1
+    - LGPL-3.0
+  allowed:
+    - MIT
+    - Apache-2.0
+    - BSD-2-Clause
+    - BSD-3-Clause
+    - ISC
+    - Zlib
+    - Unlicense
+    - CC0-1.0
+    - BSL-1.0
+    - Unicode-3.0
+    - Unicode-DFS-2016
+    - MIT-0
+# Supply chain security (cooling policy)
+cooling:
+  enabled: true
+  min_age_days: 7
+  min_downloads: 100
+  alert_only: false
+  grace_period_days: 3
+  exceptions:
+    - pattern: "github.com/3leaps/*"
+      reason: "Internal packages"
+    - pattern: "github.com/lanytehq/*"
+      reason: "Estate org packages"
+    - pattern: "github.com/fulmenhq/*"
+      reason: "Fulmen ecosystem packages"
+    - pattern: "github.com/birchton/*"
+      reason: "Estate org packages"
+# Policy engine configuration
+policy_engine:
+  type: embedded
+# Language-specific settings
+languages:
+  - language: rust
+    paths:
+      - Cargo.toml
+      - crates/waitprims-core/Cargo.toml
+      - crates/waitprims-async/Cargo.toml
+      - crates/waitprims-testkit/Cargo.toml
+      - crates/waitprims-cli/Cargo.toml
