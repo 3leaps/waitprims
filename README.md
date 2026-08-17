@@ -58,7 +58,9 @@ silently advance cursors.
 
 ## Status
 
-This tree is an early scaffold (`0.1.0-dev`). APIs are not stable.
+This is the first tagged library (`0.1.0`). Pin from git
+(`git = "…", tag = "v0.1.0"`). There is no crates.io crate. APIs may
+still move.
 
 Pinned `contract: agent-wait/v0` at Crucible `f1912957cde19b2b1e7809e430cc28dc417287cc`. See [`schemas/v0/PIN.md`](schemas/v0/PIN.md).
 
