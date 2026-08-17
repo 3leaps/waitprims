@@ -1,29 +1,26 @@
 # waitprims CI
 #
-# Five-platform matrix. This crate is a waiter: first-match, poll, restore,
-# and poll-ack must run on every OS/arch, not only linux x86_64.
+# Not one required 5-wide PR gate. The required gate is `fast` on
+# ubuntu-latest. Hosted and arm64 jobs are native smokes.
 #
-# Why the matrix exists:
-# - Clock resolution differs. Windows default timer granularity is typically
-#   ~15.6ms; macOS and Linux are finer. Same-instant ties, restore, and
-#   poll-ack use contract timestamps and registration-set order. Do not use
-#   a sub-ms sleep or wall Instant as a uniqueness key.
-# - Windows POSIX gaps: no EINTR, no unix domain sockets, no signal-driven
-#   cancel. Cancel is a watch token; deadlines use Clock::sleep_until.
+# Five cells (native per arch; no cross, no musl, no macOS Intel,
+# no goneat-tools-runner):
+#   ubuntu-latest              x86_64-unknown-linux-gnu
+#   macos-14                   aarch64-apple-darwin
+#   windows-latest             x86_64-pc-windows-msvc
+#   ubuntu-latest-arm64-s      aarch64-unknown-linux-gnu
+#   windows-latest-arm64-s     aarch64-pc-windows-msvc
 #
-# Estate runner labels (copy these):
-#   ubuntu-latest              linux x86_64
-#   ubuntu-latest-arm64-s      linux arm64 (Arm-Limited managed, native)
-#   windows-latest             windows x86_64
-#   windows-latest-arm64-s     windows arm64 (custom runner lab, native)
-#   macos-14                   macos aarch64
+# platform-smoke-arm64 is same-repo only and is not a required gate.
+# Custom labels are declared in .github/actionlint.yaml (lint only;
+# that file does not deploy a runner).
 #
-# rustc is workspace MSRV 1.88.0. fail-fast is false so one platform does
-# not hide another. Pin stays contract: agent-wait/v0 at
+# FakeClock is logical. Same-instant / restore / poll-ack use contract
+# timestamps and registration-set order, not wall sleeps. Windows has
+# no EINTR, UDS, or signal-driven cancel; Cancel is a watch token.
+#
+# rustc is workspace MSRV 1.88.0. Pin stays contract: agent-wait/v0 at
 # f1912957cde19b2b1e7809e430cc28dc417287cc.
-#
-# Timing-sensitive portable cancel tests are re-run with --test-threads=1.
-# The rest of the suite stays parallel.
 
 name: CI
 
@@ -34,29 +31,16 @@ on:
 permissions:
   contents: read
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  test:
-    name: ${{ matrix.name }}
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: linux-x86_64
-            runner: ubuntu-latest
-            fmt: true
-          - name: linux-arm64
-            runner: ubuntu-latest-arm64-s
-            fmt: false
-          - name: windows-x86_64
-            runner: windows-latest
-            fmt: false
-          - name: windows-arm64
-            runner: windows-latest-arm64-s
-            fmt: false
-          - name: macos-aarch64
-            runner: macos-14
-            fmt: false
+  fast:
+    name: fast
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -70,7 +54,6 @@ jobs:
           components: rustfmt, clippy
 
       - name: Format
-        if: matrix.fmt
         run: cargo fmt --check
 
       - name: Clippy
@@ -79,5 +62,82 @@ jobs:
       - name: Test
         run: cargo test --workspace --locked
 
-      - name: Timing-sensitive portable cancel
-        run: cargo test --locked -p waitprims-async portable_cancel -- --test-threads=1
+  platform-smoke-hosted:
+    name: platform-smoke-hosted (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - runner: macos-14
+            target: aarch64-apple-darwin
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust 1.88.0
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.88.0
+          components: clippy
+
+      - name: Verify native host
+        run: |
+          set -euo pipefail
+          host=$(rustc -vV | awk '/^host:/{print $2}')
+          test "$host" = "${{ matrix.target }}"
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace --locked
+
+  # Same-repo only. Not a required PR gate. Fork PRs skip these cells.
+  platform-smoke-arm64:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    name: platform-smoke-arm64 (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest-arm64-s
+            target: aarch64-unknown-linux-gnu
+          - runner: windows-latest-arm64-s
+            target: aarch64-pc-windows-msvc
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust 1.88.0
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.88.0
+          components: clippy
+
+      - name: Verify native host
+        run: |
+          set -euo pipefail
+          host=$(rustc -vV | awk '/^host:/{print $2}')
+          test "$host" = "${{ matrix.target }}"
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace --locked

@@ -421,8 +421,8 @@ mod tests {
 
     #[test]
     fn one_millisecond_is_a_distinct_logical_instant() {
-        // Windows Sleep granularity is typically ~15.6ms. Contract time is
-        // not: 1ms (and 1µs) stay distinct without a wall sleep key.
+        // Contract timestamps stay distinct. FakeClock is logical; this is
+        // not a wall-sleep uniqueness key.
         let a = Timestamp::parse("2026-08-15T16:05:00.001000Z").unwrap();
         let b = Timestamp::parse("2026-08-15T16:05:00.002000Z").unwrap();
         assert_ne!(a, b);

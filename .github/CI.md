@@ -1,34 +1,43 @@
 # CI note
 
-waitprims is a waiter. The five-platform matrix exists because a
-linux-x86-only job would hide the races this crate is supposed to catch.
+The required PR gate is `fast` on `ubuntu-latest`. The five native cells
+are not one required 5-wide gate. `platform-smoke-arm64` is same-repo
+only and must not be marked required.
 
-## Clock resolution
+## Jobs
 
-Windows default timer granularity is typically about 15.6 ms. macOS and
-Linux are finer. Same-instant first-match ties, loser restore, and
-poll-ack commit must use contract timestamps and registration-set order.
-They must not use a sub-millisecond `sleep` or a wall `Instant` as a
-uniqueness key. A 1 ms sleep that distinguishes two events on Linux can
-collapse on Windows.
+| Job | When | Role |
+| --- | --- | --- |
+| `fast` | every push/PR | fmt, clippy `-D warnings`, `cargo test --workspace --locked`, MSRV 1.88.0 |
+| `platform-smoke-hosted` | every push/PR | native clippy + locked tests; `fail-fast: false` |
+| `platform-smoke-arm64` | same-repo only | native clippy + locked tests; `fail-fast: false`; not a required gate |
 
-## POSIX gaps on Windows
+`.github/actionlint.yaml` lists the custom runner labels so actionlint
+does not treat them as unknown. That file does not deploy a runner.
 
-Windows has no `EINTR`, no unix domain sockets, and no signal-driven
-cancel. `Cancel` is a portable watch token. Deadlines go through
-`Clock::sleep_until`. Unix-only paths, if any, stay behind `#[cfg(unix)]`
-and have a Windows counterpart on this portable cancel/timeout path.
+## Five cells (native, no cross)
 
-## Estate runner labels
+| Job | `runs-on` | rustc host |
+| --- | --- | --- |
+| hosted | `ubuntu-latest` | `x86_64-unknown-linux-gnu` |
+| hosted | `macos-14` | `aarch64-apple-darwin` |
+| hosted | `windows-latest` | `x86_64-pc-windows-msvc` |
+| arm64 | `ubuntu-latest-arm64-s` | `aarch64-unknown-linux-gnu` |
+| arm64 | `windows-latest-arm64-s` | `aarch64-pc-windows-msvc` |
 
-| Platform        | `runs-on`                |
-| --------------- | ------------------------ |
-| linux x86_64    | `ubuntu-latest`          |
-| linux arm64     | `ubuntu-latest-arm64-s`  |
-| windows x86_64  | `windows-latest`         |
-| windows arm64   | `windows-latest-arm64-s` |
-| macos aarch64   | `macos-14`               |
+No musl, no macOS Intel, no `goneat-tools-runner`. Windows steps use
+`shell: bash`.
 
-`fail-fast: false` so one platform does not hide another. rustc is
-workspace MSRV 1.88.0. Pin stays `contract: agent-wait/v0` at
+## Clock and POSIX gaps
+
+`waitprims-testkit` `FakeClock` is logical. Same-instant ties, restore,
+and poll-ack use contract timestamps and registration-set order. Do not
+add sleep-based uniqueness tests that assume Unix 1ms timers. Windows
+timer granularity is coarser.
+
+Windows has no `EINTR`, unix domain sockets, or signal-driven cancel.
+`Cancel` is a portable watch token. `#[cfg(unix)]` is only for real
+POSIX-only paths; cancel/timeout have a portable Windows counterpart.
+
+Pin stays `contract: agent-wait/v0` at
 `f1912957cde19b2b1e7809e430cc28dc417287cc`.

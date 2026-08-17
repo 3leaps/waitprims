@@ -71,13 +71,11 @@ cargo test
 cargo build -p waitprims-cli
 ```
 
-CI runs `cargo fmt --check` (linux x86_64), `cargo clippy --workspace
---all-targets -- -D warnings`, and `cargo test --workspace --locked` on
-five native runners (`ubuntu-latest`, `ubuntu-latest-arm64-s`,
-`windows-latest`, `windows-latest-arm64-s`, `macos-14`). The matrix
-exists because clock resolution and Windows POSIX gaps (no `EINTR`, unix
-domain sockets, or signal-driven cancel) would hide waiter races on a
-linux-only job. See [`.github/CI.md`](.github/CI.md).
+The required CI gate is `fast` on `ubuntu-latest` (`cargo fmt --check`,
+`cargo clippy --workspace --all-targets -- -D warnings`,
+`cargo test --workspace --locked`, MSRV 1.88.0). Hosted and arm64
+smokes cover five native cells; arm64 is same-repo only and is not a
+required gate. See [`.github/CI.md`](.github/CI.md).
 
 The diagnostic binary lands at `target/debug/waitprims`.
 

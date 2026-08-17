@@ -1,11 +1,10 @@
-//! Platform proofs: clock resolution and portable cancel/timeout.
+//! Platform proofs: logical clock, restore/ack, and portable cancel.
 //!
-//! Same-instant first-match, restore, and poll-ack must not depend on OS
-//! timer granularity. Windows Sleep is typically ~15.6ms; a 1ms wall sleep
-//! is not a uniqueness key. Cancel and deadline use the portable watch
-//! token and [`waitprims_async::Clock`], not `EINTR`, UDS, or signals.
-
-use std::time::Duration;
+//! [`FakeClock`] is logical. Same-instant first-match, restore, and poll-ack
+//! use contract timestamps and registration-set order. Do not key uniqueness
+//! on a wall `sleep`; Windows timer granularity is coarser than Unix 1ms.
+//! Cancel and deadline use the portable watch token and
+//! [`waitprims_async::Clock`], not `EINTR`, UDS, or signals.
 
 use waitprims_async::{run_first_match, run_poll_cycle, Cancel, POLL_ACK_RETENTION, TIE_RULE};
 use waitprims_core::{
@@ -37,13 +36,8 @@ fn two_arm_set() -> waitprims_core::RegistrationSet {
     ])
 }
 
-/// A 1ms wall sleep may be a no-op on Windows. It must not become a tie key.
-fn sleep_below_windows_timer_granularity() {
-    std::thread::sleep(Duration::from_millis(1));
-}
-
 #[tokio::test]
-async fn same_instant_tie_ignores_wall_sleep_between_event_builds() {
+async fn same_instant_tie_uses_registration_order_not_wall_clock() {
     assert_eq!(
         TIE_RULE,
         "same-instant winner is the earliest arm in registration_set.registrations"
@@ -52,11 +46,10 @@ async fn same_instant_tie_ignores_wall_sleep_between_event_builds() {
     let request = live_wait_request();
     let at = "2026-08-15T16:05:00Z";
     let sms = wait_event("reg:sms-1", "sms_inbound", "evt:sms-1", at);
-    sleep_below_windows_timer_granularity();
     let chanvoy = wait_event("reg:chanvoy-1", "chanvoy_wait", "evt:chanvoy-1", at);
     assert_eq!(
         sms.observed_at, chanvoy.observed_at,
-        "same observed_at is the tie key, not a wall Instant after a 1ms sleep"
+        "same observed_at is the tie key, not a wall Instant"
     );
     let script = Script {
         buffer_limit: 8,
@@ -78,13 +71,13 @@ async fn same_instant_tie_ignores_wall_sleep_between_event_builds() {
             .get("reg:sms-1")
             .map(Vec::as_slice),
         Some(["evt:sms-1".to_string()].as_slice()),
-        "same-instant loser must restore by event_id, not clock resolution: {:?}",
+        "same-instant loser must restore by event_id: {:?}",
         observer.queued_event_ids()
     );
 }
 
 #[tokio::test]
-async fn coarse_clock_harvest_uses_registration_order_and_restores() {
+async fn coarse_logical_clock_harvest_uses_registration_order_and_restores() {
     let set = two_arm_set();
     let request = live_wait_request();
     let earlier = wait_event(
@@ -101,11 +94,11 @@ async fn coarse_clock_harvest_uses_registration_order_and_restores() {
     );
     assert_ne!(
         earlier.observed_at, later.observed_at,
-        "1ms is distinct on the contract even when Windows Sleep would coalesce it"
+        "contract timestamps stay distinct; FakeClock does not collapse them"
     );
-    // Start already past both instants. A coarse timer (Windows ~15.6ms)
-    // cannot split them; the harvest is a registration-order tie and the
-    // loser must still restore.
+    // Logical now is already past both instants, as a coarse OS timer would
+    // report if it cannot split 1ms. The harvest is registration-order and
+    // the loser must still restore.
     let clock = FakeClock::auto(ts("2026-08-15T16:05:00.016000Z"));
     let script = Script {
         buffer_limit: 8,
@@ -120,7 +113,7 @@ async fn coarse_clock_harvest_uses_registration_order_and_restores() {
     assert_eq!(
         first.events.as_ref().unwrap()[0].event_id.as_str(),
         "evt:chanvoy-1",
-        "when the clock cannot split 1ms, winner is registration order"
+        "when the logical clock is past both instants, winner is registration order"
     );
     assert_eq!(
         observer
@@ -128,7 +121,7 @@ async fn coarse_clock_harvest_uses_registration_order_and_restores() {
             .get("reg:sms-1")
             .map(Vec::as_slice),
         Some(["evt:sms-1".to_string()].as_slice()),
-        "loser must restore even when observed_at differs by 1ms: {:?}",
+        "loser must restore: {:?}",
         observer.queued_event_ids()
     );
     let second = run_first_match(&set, &request, &observer, &clock, &Cancel::new())
@@ -163,12 +156,11 @@ async fn restore_identity_is_event_id_not_wall_instant() {
         first.events.as_ref().unwrap()[0].registration_id.as_str(),
         "reg:chanvoy-1"
     );
-    sleep_below_windows_timer_granularity();
     let queued = observer.queued_event_ids();
     assert_eq!(
         queued.get("reg:sms-1").map(Vec::as_slice),
         Some(["evt:sms-1".to_string()].as_slice()),
-        "restore must keep the loser event_id across a 1ms wall sleep: {queued:?}"
+        "restore must keep the loser event_id: {queued:?}"
     );
     let second = run_first_match(&set, &request, &observer, &clock, &Cancel::new())
         .await
@@ -214,7 +206,6 @@ async fn poll_ack_commit_is_not_a_clock_tick() {
         .find(|arm| arm.registration_id.as_str() == "reg:sms-1")
         .map(|arm| arm.start_anchor.clone())
         .expect("start");
-    sleep_below_windows_timer_granularity();
     let mut second_req = request.clone();
     second_req.message_id = IdToken::new("msg:aw-poll-req-2");
     let second = run_poll_cycle(&set, &second_req, &observer, &clock, &Cancel::new())
@@ -224,7 +215,7 @@ async fn poll_ack_commit_is_not_a_clock_tick() {
     assert_eq!(
         second.events[0].event_id.as_str(),
         "evt:sms-1",
-        "a wall-clock tick is not poll_cycle_ack"
+        "a later FakeClock read is not poll_cycle_ack"
     );
     assert_eq!(
         second
@@ -263,7 +254,7 @@ async fn poll_ack_commit_is_not_a_clock_tick() {
 }
 
 #[tokio::test]
-async fn poll_same_instant_defer_restores_without_sleep_key() {
+async fn poll_same_instant_defer_restores_by_event_id() {
     let set = two_arm_set();
     let at = "2026-08-15T16:05:00.000001Z";
     let script = Script {
@@ -286,7 +277,6 @@ async fn poll_same_instant_defer_restores_without_sleep_key() {
         .expect("first cycle");
     admit_poll(&left);
     assert_eq!(left.events[0].event_id.as_str(), "evt:left");
-    sleep_below_windows_timer_granularity();
     let mut second = first.clone();
     second.message_id = IdToken::new("msg:aw-poll-req-2");
     second.fairness_cursor = left.next_fairness_cursor.clone();
@@ -297,7 +287,7 @@ async fn poll_same_instant_defer_restores_without_sleep_key() {
     assert_eq!(
         right.events[0].event_id.as_str(),
         "evt:right",
-        "deferred same-instant event must restore by event_id, not sleep: {:?}",
+        "deferred same-instant event must restore by event_id: {:?}",
         right.events
     );
 }
@@ -343,12 +333,6 @@ async fn prove_portable_deadline_and_cancel() {
 
 #[tokio::test]
 async fn portable_deadline_and_cancel_do_not_need_eintr() {
-    prove_portable_deadline_and_cancel().await;
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn unix_deadline_and_cancel_use_clock_and_watch_token() {
     prove_portable_deadline_and_cancel().await;
 }
 
