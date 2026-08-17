@@ -1,11 +1,19 @@
-//! Core types, errors, and helpers for waitprims.
+//! Types, errors, validation, digest, and time helpers for waitprims.
 //!
-//! Public JSON is exactly the six `agent-wait/v0` message kinds. Runtime-only
-//! types, including caller-owned delivery/activation evidence, must not
-//! serialize as that contract.
+//! This is the foundation crate. It has no async runtime and does not
+//! open sockets. Public JSON is exactly the six `agent-wait/v0` message
+//! kinds: `registration_set`, `live_wait_request`, `live_wait_outcome`,
+//! `poll_cycle_request`, `poll_cycle_outcome`, `poll_cycle_ack`.
+//! Runtime-only types, including caller-owned delivery/activation
+//! evidence, must not serialize as that contract.
+//!
+//! Pin: [`CAPABILITY`] at Crucible [`PINNED_CRUCIBLE_SHA`]. Resolve
+//! through vendored `contract.json`, then the relative `entry_schema`.
+//! Schema `$id` is not the contract-entry mechanism.
 //!
 //! Contract admission is only [`validate_message`] / [`validate_raw_documents`].
 //! [`serde_json::from_str`] on [`AgentWaitMessage`] is not admission.
+//! RFC3339 comparison pads and truncates fractions to six digits.
 
 pub mod contract;
 pub mod digest;

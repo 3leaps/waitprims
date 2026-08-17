@@ -1,0 +1,17 @@
+# goneat assess configuration for waitprims
+# Rust library. Rust checks (cargo fmt, clippy) stay on the fast CI gate.
+# This config handles GitHub Actions. YAML format is yamlfmt (Apache-2.0)
+# via .yamlfmt. Do not enable yamllint (GPL-3.0-or-later).
+#
+# NOTE: goneat does not have native Rust support. Do not add
+# goneat-tools-runner or GPL tools to this tree.
+version: 1
+lint:
+  # GitHub Actions linting (actionlint is MIT)
+  github_actions:
+    actionlint:
+      enabled: true
+      paths:
+        - ".github/workflows/**/*.yml"
+        - ".github/workflows/**/*.yaml"
+      ignore: []

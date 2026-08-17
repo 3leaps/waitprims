@@ -1,7 +1,11 @@
 //! Deterministic test helpers for waitprims.
 //!
-//! Fake clocks and scripted observers live here. This crate does not
-//! perform network I/O.
+//! [`FakeClock`] is logical. Same-instant ties, restore, and poll-ack
+//! use contract timestamps and registration-set order. Do not key
+//! uniqueness on a wall `sleep`. Scripted observers live here so proofs
+//! stay off the network.
+//!
+//! This crate does not perform network I/O and is not a daemon.
 
 mod bind;
 mod case;
@@ -24,6 +28,8 @@ pub use waitprims_async::{
     Result, POLL_ACK_RETENTION, TIE_RULE,
 };
 
+#[cfg(test)]
+mod care_proofs;
 #[cfg(test)]
 mod platform_proofs;
 #[cfg(test)]

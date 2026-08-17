@@ -1,6 +1,8 @@
 //! Diagnostic CLI for waitprims.
 //!
 //! Argument parsing and output only. Library crates own the logic.
+//! There is no daemon, no credential flag, and no extra wire kind.
+//! JSON goes to stdout; logs and errors go to stderr.
 
 use std::fs;
 use std::path::{Path, PathBuf};

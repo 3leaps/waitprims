@@ -1,12 +1,17 @@
 //! Async first-match and poll-cycle runners.
 //!
 //! Tokio is used for runtime, time, and synchronization only. This crate
-//! does not open network sockets.
+//! does not open network sockets and is not a daemon.
 //!
 //! Public JSON remains exactly the six `agent-wait/v0` message kinds.
 //! The observer seam (bind / next / cancel) is a runtime interface, not a
 //! wire type. Delivery and activation stay caller-owned or opaque refs;
 //! runners do not collapse them into match.
+//!
+//! [`Cancel`] is a portable watch token. Deadlines use [`Clock`], not
+//! `EINTR`, unix-domain sockets, signals, or a Windows Job Object.
+//! [`Observer::restore_ready`] errors fail closed: runners return `Err`
+//! rather than drop a consumed observation.
 
 mod cancel;
 mod clock;
