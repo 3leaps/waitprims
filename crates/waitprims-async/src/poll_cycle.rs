@@ -27,7 +27,9 @@ use crate::cancel::Cancel;
 use crate::clock::Clock;
 use crate::observer::{BindHandle, Observation, Observer};
 use crate::outcome::ResolvedStart;
-use crate::race::{observation_is_terminal, FirstReady};
+use crate::race::{
+    observation_is_replayable, observation_is_terminal, FirstReady, FirstReadyOutput,
+};
 
 /// Consumer-facing poll ack / retention addendum. Not a wire kind.
 ///
@@ -330,18 +332,21 @@ async fn observe_pending<O: Observer>(
     observer: &O,
     bound: &[Option<O::Bind>],
     pending: &[usize],
-) -> Result<Vec<(usize, Observation)>> {
+) -> FirstReadyOutput<Observation> {
     if pending.is_empty() {
         std::future::pending::<()>().await;
     }
-    let ready = FirstReady::new(
+    let collected = FirstReady::new(
         pending
             .iter()
             .map(|&idx| observer.next(bound[idx].as_ref().expect("bound"))),
         observation_is_terminal,
     )
-    .await?;
-    Ok(remap_ready(pending, ready))
+    .await;
+    FirstReadyOutput {
+        ready: remap_ready(pending, collected.ready),
+        error: collected.error,
+    }
 }
 
 async fn bind_unbound<O: Observer>(
@@ -350,11 +355,11 @@ async fn bind_unbound<O: Observer>(
     request: &PollCycleRequest,
     unbound: &[usize],
     resolved: &Arc<Mutex<Vec<ResolvedStart>>>,
-) -> Result<Vec<(usize, O::Bind)>> {
+) -> FirstReadyOutput<O::Bind> {
     if unbound.is_empty() {
         std::future::pending::<()>().await;
     }
-    let ready = FirstReady::new(
+    let collected = FirstReady::new(
         unbound.iter().map(|&idx| {
             let resolved = Arc::clone(resolved);
             let registration = bind_registration(&set.registrations[idx], request);
@@ -362,8 +367,11 @@ async fn bind_unbound<O: Observer>(
         }),
         bind_is_terminal,
     )
-    .await?;
-    Ok(remap_ready(unbound, ready))
+    .await;
+    FirstReadyOutput {
+        ready: remap_ready(unbound, collected.ready),
+        error: collected.error,
+    }
 }
 
 fn occupied_refs<B>(binds: &[Option<B>]) -> Vec<(usize, &B)> {
@@ -413,18 +421,28 @@ where
     let order = fairness_order(set, request);
     loop {
         if cancel.is_cancelled() {
-            return finish(
-                set,
-                request,
-                clock.now(),
-                &snapshot(&resolved),
+            return emit(
+                observer,
+                &bound,
                 &visits,
-                Some("consumer_cancelled"),
+                finish(
+                    set,
+                    request,
+                    clock.now(),
+                    &snapshot(&resolved),
+                    &visits,
+                    Some("consumer_cancelled"),
+                ),
             );
         }
         let starts = merge_starts(&starts_from_slots(&bound), &snapshot(&resolved));
         if deadline_reached(request, &clock.now()) {
-            return decide_at_deadline(set, request, &clock.now(), &starts, &visits);
+            return emit(
+                observer,
+                &bound,
+                &visits,
+                decide_at_deadline(set, request, &clock.now(), &starts, &visits),
+            );
         }
 
         let wait_until = earliest_deadline(request);
@@ -435,7 +453,12 @@ where
                 .filter(|idx| bound[*idx].is_some() && !visits.contains_key(idx))
                 .collect();
             if pending.is_empty() && visits.len() == set.registrations.len() {
-                return assemble(set, request, clock.now(), &starts, &visits);
+                return emit(
+                    observer,
+                    &bound,
+                    &visits,
+                    assemble(set, request, clock.now(), &starts, &visits),
+                );
             }
             let unbound: Vec<usize> = order
                 .iter()
@@ -443,45 +466,77 @@ where
                 .filter(|idx| bound[*idx].is_none() && !visits.contains_key(idx))
                 .collect();
             if pending.is_empty() && unbound.is_empty() {
-                return assemble(set, request, clock.now(), &starts, &visits);
+                return emit(
+                    observer,
+                    &bound,
+                    &visits,
+                    assemble(set, request, clock.now(), &starts, &visits),
+                );
             }
             tokio::select! {
                 biased;
-                ready = observe_pending(observer, &bound, &pending) => {
-                    let mut ready = ready?;
+                collected = observe_pending(observer, &bound, &pending) => {
+                    if let Some(err) = collected.error {
+                        restore_owned_observations(observer, &bound, collected.ready)?;
+                        return emit(
+                            observer,
+                            &bound,
+                            &visits,
+                            Err(err),
+                        );
+                    }
+                    let mut ready = collected.ready;
                     let indexed = pending_refs(&bound, &pending);
                     extend_ready_refs(observer, &indexed, &mut ready);
-                    record_ready(observer, set, request, &bound, &mut budget, &mut visits, ready);
+                    record_ready(observer, set, request, &bound, &mut budget, &mut visits, ready)?;
                     if visits.len() == set.registrations.len() {
-                        return assemble(set, request, clock.now(), &starts, &visits);
+                        return emit(
+                            observer,
+                            &bound,
+                            &visits,
+                            assemble(set, request, clock.now(), &starts, &visits),
+                        );
                     }
                 }
-                ready = bind_unbound(observer, set, request, &unbound, &resolved) => {
-                    for (idx, bind) in ready? {
+                collected = bind_unbound(observer, set, request, &unbound, &resolved) => {
+                    if let Some(err) = collected.error {
+                        return emit(observer, &bound, &visits, Err(err));
+                    }
+                    for (idx, bind) in collected.ready {
                         bound[idx] = Some(bind);
                     }
                     let mut observations = Vec::new();
                     let indexed = occupied_refs(&bound);
                     extend_ready_refs(observer, &indexed, &mut observations);
-                    record_ready(observer, set, request, &bound, &mut budget, &mut visits, observations);
+                    record_ready(observer, set, request, &bound, &mut budget, &mut visits, observations)?;
                     if visits.len() == set.registrations.len() {
-                        return assemble(
-                            set,
-                            request,
-                            clock.now(),
-                            &starts_from_slots(&bound),
+                        return emit(
+                            observer,
+                            &bound,
                             &visits,
+                            assemble(
+                                set,
+                                request,
+                                clock.now(),
+                                &starts_from_slots(&bound),
+                                &visits,
+                            ),
                         );
                     }
                 }
                 _ = cancel.cancelled() => {
-                    return finish(
-                        set,
-                        request,
-                        clock.now(),
-                        &starts,
+                    return emit(
+                        observer,
+                        &bound,
                         &visits,
-                        Some("consumer_cancelled"),
+                        finish(
+                            set,
+                            request,
+                            clock.now(),
+                            &starts,
+                            &visits,
+                            Some("consumer_cancelled"),
+                        ),
                     );
                 }
                 _ = clock.sleep_until(wait_until) => {
@@ -489,8 +544,13 @@ where
                     let mut ready = Vec::new();
                     let indexed = pending_refs(&bound, &pending);
                     extend_ready_refs(observer, &indexed, &mut ready);
-                    record_ready(observer, set, request, &bound, &mut budget, &mut visits, ready);
-                    return decide_at_deadline(set, request, &now, &starts, &visits);
+                    record_ready(observer, set, request, &bound, &mut budget, &mut visits, ready)?;
+                    return emit(
+                        observer,
+                        &bound,
+                        &visits,
+                        decide_at_deadline(set, request, &now, &starts, &visits),
+                    );
                 }
             }
             continue;
@@ -498,39 +558,57 @@ where
 
         tokio::select! {
             biased;
-            ready = bind_unbound(observer, set, request, &order, &resolved) => {
-                for (idx, bind) in ready? {
+            collected = bind_unbound(observer, set, request, &order, &resolved) => {
+                if let Some(err) = collected.error {
+                    return emit(observer, &bound, &visits, Err(err));
+                }
+                for (idx, bind) in collected.ready {
                     bound[idx] = Some(bind);
                     any_bound = true;
                 }
                 let mut observations = Vec::new();
                 let indexed = occupied_refs(&bound);
                 extend_ready_refs(observer, &indexed, &mut observations);
-                record_ready(observer, set, request, &bound, &mut budget, &mut visits, observations);
+                record_ready(observer, set, request, &bound, &mut budget, &mut visits, observations)?;
                 if visits.len() == set.registrations.len() {
-                    return assemble(
-                        set,
-                        request,
-                        clock.now(),
-                        &starts_from_slots(&bound),
+                    return emit(
+                        observer,
+                        &bound,
                         &visits,
+                        assemble(
+                            set,
+                            request,
+                            clock.now(),
+                            &starts_from_slots(&bound),
+                            &visits,
+                        ),
                     );
                 }
             }
             _ = cancel.cancelled() => {
-                return finish(
-                    set,
-                    request,
-                    clock.now(),
-                    &snapshot(&resolved),
+                return emit(
+                    observer,
+                    &bound,
                     &visits,
-                    Some("consumer_cancelled"),
+                    finish(
+                        set,
+                        request,
+                        clock.now(),
+                        &snapshot(&resolved),
+                        &visits,
+                        Some("consumer_cancelled"),
+                    ),
                 );
             }
             _ = clock.sleep_until(wait_until) => {
                 let now = clock.now();
                 let starts = snapshot(&resolved);
-                return decide_at_deadline(set, request, &now, &starts, &visits);
+                return emit(
+                    observer,
+                    &bound,
+                    &visits,
+                    decide_at_deadline(set, request, &now, &starts, &visits),
+                );
             }
         }
     }
@@ -551,15 +629,73 @@ fn extend_ready_refs<O: Observer>(
     }
 }
 
-fn restore_observation<O: Observer>(observer: &O, bind: Option<&O::Bind>, obs: Observation) {
+fn restore_observation<O: Observer>(
+    observer: &O,
+    bind: Option<&O::Bind>,
+    obs: Observation,
+) -> Result<()> {
     if let Some(bind) = bind {
-        observer.restore_ready(bind, obs);
+        observer.restore_ready(bind, obs)?;
+    }
+    Ok(())
+}
+
+fn restore_owned_observations<O: Observer>(
+    observer: &O,
+    binds: &[Option<O::Bind>],
+    ready: Vec<(usize, Observation)>,
+) -> Result<()> {
+    for (idx, obs) in ready {
+        if !observation_is_replayable(&obs) {
+            continue;
+        }
+        restore_observation(observer, binds.get(idx).and_then(|bind| bind.as_ref()), obs)?;
+    }
+    Ok(())
+}
+
+fn restore_admitted<O: Observer>(
+    observer: &O,
+    binds: &[Option<O::Bind>],
+    visits: &BTreeMap<usize, ArmVisit>,
+) -> Result<()> {
+    for (idx, visit) in visits {
+        let Some(bind) = binds.get(*idx).and_then(|bind| bind.as_ref()) else {
+            continue;
+        };
+        match visit {
+            ArmVisit::Events(events) | ArmVisit::Saturated(events) => {
+                for event in events.iter().rev() {
+                    observer.restore_ready(bind, Observation::Event(Box::new(event.clone())))?;
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn emit<O: Observer>(
+    observer: &O,
+    binds: &[Option<O::Bind>],
+    visits: &BTreeMap<usize, ArmVisit>,
+    outcome: Result<PollCycleOutcome>,
+) -> Result<PollCycleOutcome> {
+    let restored = restore_admitted(observer, binds, visits);
+    match (outcome, restored) {
+        (Ok(out), Ok(())) => Ok(out),
+        (Err(err), _) => Err(err),
+        (Ok(_), Err(err)) => Err(err),
     }
 }
 
-fn defer_ready<O: Observer>(observer: &O, bind: Option<&O::Bind>, obs: Observation) -> ArmVisit {
-    restore_observation(observer, bind, obs);
-    ArmVisit::Deferred
+fn defer_ready<O: Observer>(
+    observer: &O,
+    bind: Option<&O::Bind>,
+    obs: Observation,
+) -> Result<ArmVisit> {
+    restore_observation(observer, bind, obs)?;
+    Ok(ArmVisit::Deferred)
 }
 
 fn record_ready<O: Observer>(
@@ -570,7 +706,7 @@ fn record_ready<O: Observer>(
     budget: &mut CollectBudget,
     visits: &mut BTreeMap<usize, ArmVisit>,
     ready: Vec<(usize, Observation)>,
-) {
+) -> Result<()> {
     let mut ready_map: BTreeMap<usize, Observation> = BTreeMap::new();
     for (idx, obs) in ready {
         match ready_map.entry(idx) {
@@ -578,7 +714,7 @@ fn record_ready<O: Observer>(
                 slot.insert(obs);
             }
             Entry::Occupied(_) => {
-                restore_observation(observer, binds.get(idx).and_then(|bind| bind.as_ref()), obs);
+                restore_observation(observer, binds.get(idx).and_then(|bind| bind.as_ref()), obs)?;
             }
         }
     }
@@ -591,14 +727,15 @@ fn record_ready<O: Observer>(
         };
         let bind = binds.get(idx).and_then(|bind| bind.as_ref());
         if budget.exhausted() && matches!(obs, Observation::Event(_)) {
-            visits.insert(idx, defer_ready(observer, bind, obs));
+            visits.insert(idx, defer_ready(observer, bind, obs)?);
             continue;
         }
-        visits.insert(idx, visit_from(observer, bind, budget, obs));
+        visits.insert(idx, visit_from(observer, bind, budget, obs)?);
     }
     for (idx, obs) in ready_map {
-        restore_observation(observer, binds.get(idx).and_then(|bind| bind.as_ref()), obs);
+        restore_observation(observer, binds.get(idx).and_then(|bind| bind.as_ref()), obs)?;
     }
+    Ok(())
 }
 
 fn visit_from<O: Observer>(
@@ -606,7 +743,7 @@ fn visit_from<O: Observer>(
     bind: Option<&O::Bind>,
     budget: &mut CollectBudget,
     obs: Observation,
-) -> ArmVisit {
+) -> Result<ArmVisit> {
     match obs {
         Observation::Event(event) => {
             let event = *event;
@@ -616,22 +753,27 @@ fn visit_from<O: Observer>(
             let mut events = vec![event];
             let truncated = bind
                 .map(|bind| drain_ready(observer, bind, budget, &mut events))
+                .transpose()?
                 .unwrap_or(false);
             if truncated {
-                ArmVisit::Saturated(events)
+                Ok(ArmVisit::Saturated(events))
             } else {
-                ArmVisit::Events(events)
+                Ok(ArmVisit::Events(events))
             }
         }
-        Observation::Idle => ArmVisit::Idle,
-        Observation::Overflow => ArmVisit::Overflow,
-        Observation::Failed { reason_code } => ArmVisit::Failed(reason_code.as_str().to_string()),
-        Observation::Outage { reason_code } => ArmVisit::Outage(reason_code.as_str().to_string()),
+        Observation::Idle => Ok(ArmVisit::Idle),
+        Observation::Overflow => Ok(ArmVisit::Overflow),
+        Observation::Failed { reason_code } => {
+            Ok(ArmVisit::Failed(reason_code.as_str().to_string()))
+        }
+        Observation::Outage { reason_code } => {
+            Ok(ArmVisit::Outage(reason_code.as_str().to_string()))
+        }
         Observation::CursorUncertain { reason_code } => {
-            ArmVisit::CursorUncertain(reason_code.as_str().to_string())
+            Ok(ArmVisit::CursorUncertain(reason_code.as_str().to_string()))
         }
         Observation::Degraded { reason_code } => {
-            ArmVisit::Degraded(reason_code.as_str().to_string())
+            Ok(ArmVisit::Degraded(reason_code.as_str().to_string()))
         }
     }
 }
@@ -641,31 +783,31 @@ fn drain_ready<O: Observer>(
     bind: &O::Bind,
     budget: &mut CollectBudget,
     events: &mut Vec<WaitEvent>,
-) -> bool {
+) -> Result<bool> {
     let rid = bind.registration_id().as_str();
     if !budget.room_for_registration(rid) {
-        return true;
+        return Ok(true);
     }
     loop {
         if !budget.room_for_registration(rid) {
-            return true;
+            return Ok(true);
         }
         let Some(obs) = observer.poll_ready(bind) else {
-            return false;
+            return Ok(false);
         };
         match obs {
             Observation::Event(event) => {
                 let event = *event;
                 if !budget.try_take(&event) {
-                    restore_observation(observer, Some(bind), Observation::Event(Box::new(event)));
-                    return true;
+                    restore_observation(observer, Some(bind), Observation::Event(Box::new(event)))?;
+                    return Ok(true);
                 }
                 events.push(event);
             }
-            Observation::Overflow => return true,
+            Observation::Overflow => return Ok(true),
             other => {
-                restore_observation(observer, Some(bind), other);
-                return false;
+                restore_observation(observer, Some(bind), other)?;
+                return Ok(false);
             }
         }
     }

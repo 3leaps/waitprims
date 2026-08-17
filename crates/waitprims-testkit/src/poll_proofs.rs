@@ -842,9 +842,17 @@ async fn per_registration_event_bound_is_partial_not_complete() {
     assert_eq!(first.outcome_kind, OutcomeKind::Partial);
     assert_eq!(first.events.len(), 1);
     assert_eq!(first.events[0].event_id.as_str(), "evt:sms-1");
+    assert_eq!(
+        observer
+            .queued_event_ids()
+            .get("reg:sms-1")
+            .map(Vec::as_slice),
+        Some(["evt:sms-1".to_string(), "evt:sms-2".to_string()].as_slice()),
+        "admitted and leftover events must both stay queued until ack: {:?}",
+        observer.queued_event_ids()
+    );
     let mut second_req = replay_req.clone();
     second_req.message_id = IdToken::new("msg:aw-poll-req-2");
-    let clock = FakeClock::auto(second_req.created_at.clone());
     let second = run_cycle(&replay_set, &second_req, &observer, &clock).await;
     assert_eq!(
         second
@@ -852,8 +860,8 @@ async fn per_registration_event_bound_is_partial_not_complete() {
             .iter()
             .map(|e| e.event_id.as_str())
             .collect::<Vec<_>>(),
-        vec!["evt:sms-2"],
-        "unreported item must remain for replay, not be silently dropped: {:?}",
+        vec!["evt:sms-1"],
+        "unacked restart on the same observer must replay the admitted event: {:?}",
         second.events
     );
 }
@@ -1385,7 +1393,9 @@ async fn deferred_observations_replay_in_order_when_restored() {
             .queued_event_ids()
             .get("reg:sms-1")
             .map(Vec::as_slice),
-        Some(["evt:sms-2".to_string()].as_slice())
+        Some(["evt:sms-1".to_string(), "evt:sms-2".to_string()].as_slice()),
+        "admitted head and leftover must stay queued in order: {:?}",
+        observer.queued_event_ids()
     );
     let mut second_req = one_req.clone();
     second_req.message_id = IdToken::new("msg:aw-poll-req-2");
@@ -1396,9 +1406,16 @@ async fn deferred_observations_replay_in_order_when_restored() {
             .iter()
             .map(|event| event.event_id.as_str())
             .collect::<Vec<_>>(),
-        vec!["evt:sms-2"],
-        "same-arm leftover must replay in restore order: {:?}",
+        vec!["evt:sms-1"],
+        "unacked same-observer restart must replay the admitted head: {:?}",
         second.events
+    );
+    assert_eq!(
+        observer
+            .queued_event_ids()
+            .get("reg:sms-1")
+            .map(Vec::as_slice),
+        Some(["evt:sms-1".to_string(), "evt:sms-2".to_string()].as_slice())
     );
 }
 
@@ -1425,14 +1442,17 @@ async fn cancel_bound_exhaustion_and_restart_before_ack_do_not_advance_cursors()
         )],
     };
     let clock = FakeClock::auto(request.created_at.clone());
-    let first = run_cycle(
-        &set,
-        &request,
-        &ScriptedObserver::new(script.clone(), clock.clone()),
-        &clock,
-    )
-    .await;
+    let observer = ScriptedObserver::new(script, clock.clone());
+    let first = run_cycle(&set, &request, &observer, &clock).await;
     assert_eq!(first.outcome_kind, OutcomeKind::Events);
+    assert_eq!(
+        observer
+            .queued_event_ids()
+            .get("reg:sms-1")
+            .map(Vec::as_slice),
+        Some(["evt:sms-1".to_string()].as_slice()),
+        "admitted event must stay queued on the same observer until ack"
+    );
     let original = Anchor {
         kind: AnchorKind::ProviderOpaque,
         value: IdToken::new("anc:cursor-0"),
@@ -1446,16 +1466,9 @@ async fn cancel_bound_exhaustion_and_restart_before_ack_do_not_advance_cursors()
 
     let cancel = Cancel::new();
     cancel.trigger();
-    let clock = FakeClock::auto(request.created_at.clone());
-    let cancelled = run_poll_cycle(
-        &set,
-        &request,
-        &ScriptedObserver::new(Script::default(), clock.clone()),
-        &clock,
-        &cancel,
-    )
-    .await
-    .expect("pre-ack cancel");
+    let cancelled = run_poll_cycle(&set, &request, &observer, &clock, &cancel)
+        .await
+        .expect("pre-ack cancel");
     admit(&cancelled);
     assert_eq!(cancelled.outcome_kind, OutcomeKind::Cancelled);
     assert_eq!(
@@ -1471,6 +1484,14 @@ async fn cancel_bound_exhaustion_and_restart_before_ack_do_not_advance_cursors()
         cancelled.retained_through.get("reg:sms-1"),
         Some(&proposed),
         "cancel must not inherit an unacked proposed cursor"
+    );
+    assert_eq!(
+        observer
+            .queued_event_ids()
+            .get("reg:sms-1")
+            .map(Vec::as_slice),
+        Some(["evt:sms-1".to_string()].as_slice()),
+        "cancel after an unacked outcome must not drop the same-observer event"
     );
 
     let mut tight_reg = registration("reg:sms-1", "sms_inbound", "sms:inbox-1");
@@ -1512,17 +1533,11 @@ async fn cancel_bound_exhaustion_and_restart_before_ack_do_not_advance_cursors()
             .queued_event_ids()
             .get("reg:sms-1")
             .map(Vec::as_slice),
-        Some(["evt:sms-2".to_string()].as_slice())
+        Some(["evt:sms-1".to_string(), "evt:sms-2".to_string()].as_slice()),
+        "bound exhaustion must restore admitted and leftover on the same observer"
     );
 
-    let clock = FakeClock::auto(tight_req.created_at.clone());
-    let restart = run_cycle(
-        &tight_set,
-        &tight_req,
-        &ScriptedObserver::new(bounded, clock.clone()),
-        &clock,
-    )
-    .await;
+    let restart = run_cycle(&tight_set, &tight_req, &observer, &clock).await;
     assert_eq!(restart.events[0].event_id.as_str(), "evt:sms-1");
     assert_eq!(
         restart
@@ -1539,6 +1554,152 @@ async fn cancel_bound_exhaustion_and_restart_before_ack_do_not_advance_cursors()
         serde_json::to_string(&AgentWaitMessage::PollCycleOutcome(restart)).expect("serialize");
     validate_raw_documents([&exhausted_json, &restart_json])
         .expect("unacked bound-exhaustion restart must not silently advance");
+}
+
+#[tokio::test]
+async fn same_observer_keeps_admitted_events_until_ack() {
+    let set = registration_set(vec![registration(
+        "reg:sms-1",
+        "sms_inbound",
+        "sms:inbox-1",
+    )]);
+    let request = poll_cycle_request(&set);
+    let script = Script {
+        buffer_limit: 8,
+        events: vec![wait_event(
+            "reg:sms-1",
+            "sms_inbound",
+            "evt:sms-1",
+            "2026-08-15T16:05:00Z",
+        )],
+    };
+    let clock = FakeClock::auto(request.created_at.clone());
+    let observer = ScriptedObserver::new(script, clock.clone());
+    let first = run_cycle(&set, &request, &observer, &clock).await;
+    assert_eq!(first.outcome_kind, OutcomeKind::Events);
+    assert_eq!(first.events[0].event_id.as_str(), "evt:sms-1");
+    assert_eq!(
+        observer
+            .queued_event_ids()
+            .get("reg:sms-1")
+            .map(Vec::as_slice),
+        Some(["evt:sms-1".to_string()].as_slice()),
+        "same observer must still hold the admitted event before ack"
+    );
+    assert_eq!(
+        first
+            .arms
+            .iter()
+            .find(|arm| arm.registration_id.as_str() == "reg:sms-1")
+            .map(|arm| arm.start_anchor.value.as_str()),
+        Some("anc:cursor-0")
+    );
+
+    let mut second_req = request.clone();
+    second_req.message_id = IdToken::new("msg:aw-poll-req-2");
+    let second = run_cycle(&set, &second_req, &observer, &clock).await;
+    assert_eq!(second.events[0].event_id.as_str(), "evt:sms-1");
+    assert_eq!(
+        second
+            .arms
+            .iter()
+            .find(|arm| arm.registration_id.as_str() == "reg:sms-1")
+            .map(|arm| arm.start_anchor.value.as_str()),
+        Some("anc:cursor-0"),
+        "restart before ack must not silently advance the bind start"
+    );
+    let first_json =
+        serde_json::to_string(&AgentWaitMessage::PollCycleOutcome(first)).expect("serialize first");
+    let second_json = serde_json::to_string(&AgentWaitMessage::PollCycleOutcome(second))
+        .expect("serialize second");
+    validate_raw_documents([&first_json, &second_json])
+        .expect("same-observer unacked replay must not look like silent advance");
+}
+
+#[tokio::test]
+async fn cancel_after_record_ready_restores_on_same_observer() {
+    let set = three_arm_set();
+    let request = poll_cycle_request(&set);
+    let script = Script {
+        buffer_limit: 8,
+        events: vec![
+            wait_event(
+                "reg:chanvoy-1",
+                "chanvoy_wait",
+                "evt:chanvoy-1",
+                "2026-08-15T16:05:00Z",
+            ),
+            wait_event(
+                "reg:sms-1",
+                "sms_inbound",
+                "evt:sms-1",
+                "2026-08-15T16:05:00Z",
+            ),
+        ],
+    };
+    let clock = FakeClock::auto(request.created_at.clone());
+    let observer = ScriptedObserver::new(script, clock.clone());
+    observer.hang_bind("reg:job-1");
+    let cancel = Cancel::new();
+    let set2 = set.clone();
+    let request2 = request.clone();
+    let clock2 = clock.clone();
+    let observer2 = observer.clone();
+    let cancel2 = cancel.clone();
+    let task = tokio::spawn(async move {
+        run_poll_cycle(&set2, &request2, &observer2, &clock2, &cancel2).await
+    });
+    while observer
+        .queued_event_ids()
+        .get("reg:chanvoy-1")
+        .is_none_or(|ids| !ids.is_empty())
+        || observer
+            .queued_event_ids()
+            .get("reg:sms-1")
+            .is_none_or(|ids| !ids.is_empty())
+    {
+        tokio::task::yield_now().await;
+    }
+    cancel.trigger();
+    let outcome = task.await.expect("join").expect("cancelled");
+    admit(&outcome);
+    assert_eq!(outcome.outcome_kind, OutcomeKind::Cancelled);
+    assert_eq!(
+        observer
+            .queued_event_ids()
+            .get("reg:chanvoy-1")
+            .map(Vec::as_slice),
+        Some(["evt:chanvoy-1".to_string()].as_slice()),
+        "cancel after record_ready must restore admitted events: {:?}",
+        observer.queued_event_ids()
+    );
+    assert_eq!(
+        observer
+            .queued_event_ids()
+            .get("reg:sms-1")
+            .map(Vec::as_slice),
+        Some(["evt:sms-1".to_string()].as_slice())
+    );
+    for rid in ["reg:chanvoy-1", "reg:sms-1", "reg:job-1"] {
+        if let Some(cursor) = outcome.retained_through.get(rid) {
+            assert_eq!(
+                cursor.value.as_str(),
+                "anc:cursor-0",
+                "cancel must not advance {rid}"
+            );
+        }
+    }
+
+    observer.release_hang_bind("reg:job-1");
+    let replay = run_cycle(&set, &request, &observer, &clock).await;
+    assert!(
+        replay
+            .events
+            .iter()
+            .any(|event| event.event_id.as_str() == "evt:chanvoy-1"),
+        "same observer must replay restored events after cancel: {:?}",
+        replay.events
+    );
 }
 
 #[test]
