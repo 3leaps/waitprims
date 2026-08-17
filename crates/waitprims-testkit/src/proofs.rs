@@ -1,11 +1,15 @@
-//! Proofs: first-match, deadline, cancel, drop, ties, overflow, starvation.
+//! Proofs: first-match, deadline, cancel, drop, ties, restore, overflow, starvation.
 
-use waitprims_async::{run_first_match, Cancel, TIE_RULE};
-use waitprims_core::{validate_message, AgentWaitMessage, LiveWaitOutcome, OutcomeKind, Timestamp};
+use waitprims_async::{run_first_match, Cancel, Observation, Observer, TIE_RULE};
+use waitprims_core::{
+    validate_message, AgentWaitMessage, AuthnMode, LiveWaitOutcome, OpaqueRef, OutcomeKind,
+    Registration, Result, Timestamp, ValidationError,
+};
 
 use crate::{
     exclusive_head_anchor, live_wait_request, registration, registration_baseline,
     registration_set, ts, wait_event, FakeClock, IdleObserver, Script, ScriptedObserver,
+    TrackedBind,
 };
 
 fn admit(outcome: &LiveWaitOutcome) {
@@ -223,6 +227,117 @@ async fn deterministic_tie_uses_registration_set_order() {
     let events = outcome.events.expect("events");
     assert_eq!(events[0].registration_id.as_str(), "reg:chanvoy-1");
     assert_eq!(observer.live_bind_count(), 0);
+}
+
+#[tokio::test]
+async fn same_instant_loser_is_restored_for_next_wait() {
+    let set = two_arm_set();
+    let request = live_wait_request();
+    let at = "2026-08-15T16:05:00Z";
+    let script = Script {
+        buffer_limit: 8,
+        events: vec![
+            wait_event("reg:sms-1", "sms_inbound", "evt:sms-1", at),
+            wait_event("reg:chanvoy-1", "chanvoy_wait", "evt:chanvoy-1", at),
+        ],
+    };
+    let clock = FakeClock::auto(request.created_at.clone());
+    let observer = ScriptedObserver::new(script, clock.clone());
+    let first = run_first_match(&set, &request, &observer, &clock, &Cancel::new())
+        .await
+        .expect("first-match");
+    admit(&first);
+    assert_eq!(first.outcome_kind, OutcomeKind::Events);
+    assert_eq!(
+        first.events.as_ref().unwrap()[0].registration_id.as_str(),
+        "reg:chanvoy-1"
+    );
+    assert_eq!(
+        first.events.as_ref().unwrap()[0].event_id.as_str(),
+        "evt:chanvoy-1"
+    );
+    let queued = observer.queued_event_ids();
+    assert_eq!(
+        queued.get("reg:sms-1").map(Vec::as_slice),
+        Some(["evt:sms-1".to_string()].as_slice()),
+        "same-instant loser must be restored: {queued:?}"
+    );
+    assert!(
+        queued.get("reg:chanvoy-1").is_none_or(|ids| ids.is_empty()),
+        "winner must stay consumed: {queued:?}"
+    );
+    assert_eq!(observer.live_bind_count(), 0);
+
+    let second = run_first_match(&set, &request, &observer, &clock, &Cancel::new())
+        .await
+        .expect("replay wait");
+    admit(&second);
+    assert_eq!(second.outcome_kind, OutcomeKind::Events);
+    assert_eq!(
+        second.events.as_ref().unwrap()[0].event_id.as_str(),
+        "evt:sms-1"
+    );
+    assert_eq!(
+        second.events.as_ref().unwrap()[0].registration_id.as_str(),
+        "reg:sms-1"
+    );
+    assert_eq!(observer.live_bind_count(), 0);
+}
+
+#[tokio::test]
+async fn same_instant_winner_is_registration_order_not_backfill_or_wall() {
+    assert_eq!(
+        TIE_RULE,
+        "same-instant winner is the earliest arm in registration_set.registrations"
+    );
+    let set = two_arm_set();
+    let request = live_wait_request();
+    let observed = "2026-08-15T16:05:00Z";
+    let mut sms = wait_event("reg:sms-1", "sms_inbound", "evt:aaa-sms", observed);
+    sms.occurred_at = ts("2026-08-15T16:00:00Z");
+    let mut chanvoy = wait_event("reg:chanvoy-1", "chanvoy_wait", "evt:zzz-chanvoy", observed);
+    chanvoy.occurred_at = ts("2026-08-15T16:09:00Z");
+    let script = Script {
+        buffer_limit: 8,
+        events: vec![sms, chanvoy],
+    };
+    let clock = FakeClock::auto(request.created_at.clone());
+    let observer = ScriptedObserver::new(script, clock.clone());
+    let outcome = run_first_match(&set, &request, &observer, &clock, &Cancel::new())
+        .await
+        .expect("tie");
+    admit(&outcome);
+    assert_eq!(outcome.outcome_kind, OutcomeKind::Events);
+    let events = outcome.events.expect("events");
+    assert_eq!(events[0].registration_id.as_str(), "reg:chanvoy-1");
+    assert_eq!(events[0].event_id.as_str(), "evt:zzz-chanvoy");
+    assert_eq!(events[0].observed_at, ts(observed));
+    assert_eq!(events[0].occurred_at, ts("2026-08-15T16:09:00Z"));
+    assert_eq!(observer.live_bind_count(), 0);
+
+    let reversed = registration_set(vec![
+        registration("reg:sms-1", "sms_inbound", "sms:inbox-1"),
+        registration("reg:chanvoy-1", "chanvoy_wait", "chan:seat-a"),
+    ]);
+    let mut sms = wait_event("reg:sms-1", "sms_inbound", "evt:zzz-sms", observed);
+    sms.occurred_at = ts("2026-08-15T16:09:00Z");
+    let mut chanvoy = wait_event("reg:chanvoy-1", "chanvoy_wait", "evt:aaa-chanvoy", observed);
+    chanvoy.occurred_at = ts("2026-08-15T16:00:00Z");
+    let script = Script {
+        buffer_limit: 8,
+        events: vec![chanvoy, sms],
+    };
+    let clock = FakeClock::auto(request.created_at.clone());
+    let observer = ScriptedObserver::new(script, clock.clone());
+    let outcome = run_first_match(&reversed, &request, &observer, &clock, &Cancel::new())
+        .await
+        .expect("reversed tie");
+    admit(&outcome);
+    assert_eq!(
+        outcome.events.as_ref().unwrap()[0].registration_id.as_str(),
+        "reg:sms-1",
+        "winner must follow the reversed registration set, not wall or script order"
+    );
 }
 
 #[tokio::test]
@@ -553,4 +668,251 @@ async fn slow_bind_cannot_starve_cancel_or_ready_sibling() {
     admit(&outcome);
     assert_eq!(outcome.outcome_kind, OutcomeKind::Cancelled);
     assert_eq!(observer.live_bind_count(), 0);
+}
+
+/// Dequeues from `next` only. Default `poll_ready` does not consume.
+struct NextOnlyObserver {
+    inner: ScriptedObserver,
+}
+
+impl Observer for NextOnlyObserver {
+    type Bind = TrackedBind;
+
+    async fn bind(&self, registration: &Registration) -> Result<Self::Bind> {
+        self.inner.bind(registration).await
+    }
+
+    async fn next(&self, bind: &Self::Bind) -> Result<Observation> {
+        self.inner.next(bind).await
+    }
+
+    async fn cancel(&self, bind: &Self::Bind) -> Result<()> {
+        self.inner.cancel(bind).await
+    }
+
+    fn restore_ready(&self, bind: &Self::Bind, obs: Observation) -> Result<()> {
+        self.inner.restore_ready(bind, obs)
+    }
+}
+
+/// One arm returns `next` error while a sibling can emit an event.
+struct EventPlusError {
+    inner: ScriptedObserver,
+    fail: String,
+}
+
+impl Observer for EventPlusError {
+    type Bind = TrackedBind;
+
+    async fn bind(&self, registration: &Registration) -> Result<Self::Bind> {
+        self.inner.bind(registration).await
+    }
+
+    async fn next(&self, bind: &Self::Bind) -> Result<Observation> {
+        if bind.registration_id.as_str() == self.fail {
+            return Err(ValidationError::new("/observer", "injected_arm_error").into());
+        }
+        self.inner.next(bind).await
+    }
+
+    async fn cancel(&self, bind: &Self::Bind) -> Result<()> {
+        self.inner.cancel(bind).await
+    }
+
+    fn poll_ready(&self, bind: &Self::Bind) -> Option<Observation> {
+        if bind.registration_id.as_str() == self.fail {
+            return None;
+        }
+        self.inner.poll_ready(bind)
+    }
+
+    fn restore_ready(&self, bind: &Self::Bind, obs: Observation) -> Result<()> {
+        self.inner.restore_ready(bind, obs)
+    }
+}
+
+#[tokio::test]
+async fn first_ready_error_restores_same_instant_event_for_next_wait() {
+    let set = two_arm_set();
+    let request = live_wait_request();
+    let at = "2026-08-15T16:05:00Z";
+    let script = Script {
+        buffer_limit: 8,
+        events: vec![
+            wait_event("reg:chanvoy-1", "chanvoy_wait", "evt:chanvoy-1", at),
+            wait_event("reg:sms-1", "sms_inbound", "evt:sms-1", at),
+        ],
+    };
+    let clock = FakeClock::auto(request.created_at.clone());
+    let inner = ScriptedObserver::new(script, clock.clone());
+    let observer = EventPlusError {
+        inner: inner.clone(),
+        fail: "reg:sms-1".to_string(),
+    };
+    let err = run_first_match(&set, &request, &observer, &clock, &Cancel::new())
+        .await
+        .expect_err("sibling error");
+    assert!(
+        err.to_string().contains("injected_arm_error"),
+        "unexpected error: {err}"
+    );
+    assert_eq!(
+        inner
+            .queued_event_ids()
+            .get("reg:chanvoy-1")
+            .map(Vec::as_slice),
+        Some(["evt:chanvoy-1".to_string()].as_slice()),
+        "same-instant event collected before the error must be restored: {:?}",
+        inner.queued_event_ids()
+    );
+    assert_eq!(
+        inner.queued_event_ids().get("reg:sms-1").map(Vec::as_slice),
+        Some(["evt:sms-1".to_string()].as_slice())
+    );
+    assert_eq!(inner.live_bind_count(), 0);
+
+    let replay = run_first_match(&set, &request, &inner, &clock, &Cancel::new())
+        .await
+        .expect("replay");
+    admit(&replay);
+    assert_eq!(replay.outcome_kind, OutcomeKind::Events);
+    assert_eq!(
+        replay.events.as_ref().unwrap()[0].event_id.as_str(),
+        "evt:chanvoy-1"
+    );
+}
+
+#[tokio::test]
+async fn posture_reject_restores_selected_event_for_later_wait() {
+    let mut set = registration_set(vec![registration(
+        "reg:sms-1",
+        "sms_inbound",
+        "sms:inbox-1",
+    )]);
+    set.authn_mode = AuthnMode::Required;
+    let request = live_wait_request();
+    let script = Script {
+        buffer_limit: 8,
+        events: vec![wait_event(
+            "reg:sms-1",
+            "sms_inbound",
+            "evt:sms-1",
+            "2026-08-15T16:05:00Z",
+        )],
+    };
+    let clock = FakeClock::auto(request.created_at.clone());
+    let observer = ScriptedObserver::new(script, clock.clone());
+    let refused = run_first_match(&set, &request, &observer, &clock, &Cancel::new())
+        .await
+        .expect("refused");
+    admit(&refused);
+    assert_eq!(refused.outcome_kind, OutcomeKind::Refused);
+    assert_eq!(
+        refused.reason_code.as_ref().map(|code| code.as_str()),
+        Some("authn_required")
+    );
+    assert_eq!(
+        observer
+            .queued_event_ids()
+            .get("reg:sms-1")
+            .map(Vec::as_slice),
+        Some(["evt:sms-1".to_string()].as_slice()),
+        "auth-refused selected event must be restored: {:?}",
+        observer.queued_event_ids()
+    );
+
+    let mut allowed = request.clone();
+    allowed.verification_receipt_ref = Some(OpaqueRef::new("vr:seat-a"));
+    let replay = run_first_match(&set, &allowed, &observer, &clock, &Cancel::new())
+        .await
+        .expect("replay after receipt");
+    admit(&replay);
+    assert_eq!(replay.outcome_kind, OutcomeKind::Events);
+    assert_eq!(
+        replay.events.as_ref().unwrap()[0].event_id.as_str(),
+        "evt:sms-1"
+    );
+
+    let mut leased = registration("reg:sms-1", "sms_inbound", "sms:inbox-1");
+    leased.lease_expires_at = ts("2026-08-15T16:04:00Z");
+    let lease_set = registration_set(vec![leased]);
+    let lease_script = Script {
+        buffer_limit: 8,
+        events: vec![wait_event(
+            "reg:sms-1",
+            "sms_inbound",
+            "evt:lease-1",
+            "2026-08-15T16:05:00Z",
+        )],
+    };
+    let clock = FakeClock::auto(request.created_at.clone());
+    let observer = ScriptedObserver::new(lease_script, clock.clone());
+    let reauth = run_first_match(&lease_set, &request, &observer, &clock, &Cancel::new())
+        .await
+        .expect("reauth");
+    admit(&reauth);
+    assert_eq!(reauth.outcome_kind, OutcomeKind::ReauthenticationRequired);
+    assert_eq!(
+        observer
+            .queued_event_ids()
+            .get("reg:sms-1")
+            .map(Vec::as_slice),
+        Some(["evt:lease-1".to_string()].as_slice()),
+        "lease-expired selected event must be restored: {:?}",
+        observer.queued_event_ids()
+    );
+    let mut later = registration("reg:sms-1", "sms_inbound", "sms:inbox-1");
+    later.lease_expires_at = ts("2026-08-16T00:00:00Z");
+    let later_set = registration_set(vec![later]);
+    let replay = run_first_match(&later_set, &request, &observer, &clock, &Cancel::new())
+        .await
+        .expect("replay after lease");
+    admit(&replay);
+    assert_eq!(replay.outcome_kind, OutcomeKind::Events);
+    assert_eq!(
+        replay.events.as_ref().unwrap()[0].event_id.as_str(),
+        "evt:lease-1"
+    );
+}
+
+#[tokio::test]
+async fn next_only_same_instant_loser_is_restored() {
+    let set = two_arm_set();
+    let request = live_wait_request();
+    let at = "2026-08-15T16:05:00Z";
+    let script = Script {
+        buffer_limit: 8,
+        events: vec![
+            wait_event("reg:sms-1", "sms_inbound", "evt:sms-1", at),
+            wait_event("reg:chanvoy-1", "chanvoy_wait", "evt:chanvoy-1", at),
+        ],
+    };
+    let clock = FakeClock::auto(request.created_at.clone());
+    let inner = ScriptedObserver::new(script, clock.clone());
+    let observer = NextOnlyObserver {
+        inner: inner.clone(),
+    };
+    let first = run_first_match(&set, &request, &observer, &clock, &Cancel::new())
+        .await
+        .expect("next-only first-match");
+    admit(&first);
+    assert_eq!(first.outcome_kind, OutcomeKind::Events);
+    assert_eq!(
+        first.events.as_ref().unwrap()[0].event_id.as_str(),
+        "evt:chanvoy-1"
+    );
+    assert_eq!(
+        inner.queued_event_ids().get("reg:sms-1").map(Vec::as_slice),
+        Some(["evt:sms-1".to_string()].as_slice()),
+        "next()-sourced loser must restore even when poll_ready never dequeues: {:?}",
+        inner.queued_event_ids()
+    );
+    let second = run_first_match(&set, &request, &observer, &clock, &Cancel::new())
+        .await
+        .expect("next-only replay");
+    admit(&second);
+    assert_eq!(
+        second.events.as_ref().unwrap()[0].event_id.as_str(),
+        "evt:sms-1"
+    );
 }

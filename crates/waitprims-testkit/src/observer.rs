@@ -82,6 +82,14 @@ impl ScriptedObserver {
             .insert(registration_id.to_string());
     }
 
+    /// Allow `bind()` to complete for a previously hung registration.
+    pub fn release_hang_bind(&self, registration_id: &str) {
+        self.hang_binds
+            .lock()
+            .expect("observer")
+            .remove(registration_id);
+    }
+
     /// Leave `cancel()` pending forever. Drop remains the release guarantee.
     pub fn hang_cancel(&self) {
         self.hang_cancel.store(true, Ordering::Relaxed);
@@ -161,6 +169,25 @@ impl ScriptedObserver {
     /// Exclusive cursor resolved at bind.
     pub fn bind_resolved_starts(&self) -> BTreeMap<String, Anchor> {
         self.bind_resolved.lock().expect("observer").clone()
+    }
+
+    /// Event ids still queued, front first, keyed by registration id.
+    pub fn queued_event_ids(&self) -> BTreeMap<String, Vec<String>> {
+        self.queues
+            .events
+            .lock()
+            .expect("observer")
+            .iter()
+            .map(|(rid, queue)| {
+                (
+                    rid.clone(),
+                    queue
+                        .iter()
+                        .map(|event| event.event_id.as_str().to_string())
+                        .collect(),
+                )
+            })
+            .collect()
     }
 
     fn take_due(&self, registration_id: &str) -> Option<Observation> {
@@ -273,7 +300,7 @@ impl Observer for ScriptedObserver {
         self.take_due(bind.registration_id.as_str())
     }
 
-    fn restore_ready(&self, bind: &Self::Bind, obs: Observation) {
+    fn restore_ready(&self, bind: &Self::Bind, obs: Observation) -> Result<()> {
         if let Observation::Event(event) = obs {
             self.queues
                 .events
@@ -283,6 +310,7 @@ impl Observer for ScriptedObserver {
                 .or_default()
                 .push_front(*event);
         }
+        Ok(())
     }
 }
 
@@ -330,8 +358,9 @@ impl Observer for IdleObserver {
         Ok(())
     }
 
-    fn restore_ready(&self, _bind: &Self::Bind, _obs: Observation) {
-        // `poll_ready` is the default no-dequeue impl; `next` synthesizes Idle.
+    fn restore_ready(&self, _bind: &Self::Bind, _obs: Observation) -> Result<()> {
+        // `next` synthesizes Idle and never dequeues a replayable observation.
+        Ok(())
     }
 }
 
@@ -412,7 +441,7 @@ impl Observer for EndlessReadyObserver {
         Some(Observation::Event(Box::new(self.take(bind))))
     }
 
-    fn restore_ready(&self, bind: &Self::Bind, obs: Observation) {
+    fn restore_ready(&self, bind: &Self::Bind, obs: Observation) -> Result<()> {
         if let Observation::Event(event) = obs {
             self.restored
                 .lock()
@@ -421,5 +450,6 @@ impl Observer for EndlessReadyObserver {
                 .or_default()
                 .push_front(*event);
         }
+        Ok(())
     }
 }

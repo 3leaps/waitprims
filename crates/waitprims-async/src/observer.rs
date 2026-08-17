@@ -97,9 +97,14 @@ pub trait Observer: Send + Sync {
 
     /// Put a consumed observation back so a later cycle can replay it.
     ///
-    /// Required. The runner calls this for every rejected or deferred
-    /// owned observation, whether it came from [`Self::poll_ready`] or
-    /// [`Self::next`]. Implementations that never dequeue from
-    /// [`Self::poll_ready`] may no-op, but the method cannot be omitted.
-    fn restore_ready(&self, bind: &Self::Bind, obs: Observation);
+    /// Required whenever [`Self::next`] or [`Self::poll_ready`] transferred
+    /// an owned replayable observation (typically [`Observation::Event`]).
+    /// A no-op is valid only when those methods never dequeue such an
+    /// observation (for example a synthetic [`Observation::Idle`]).
+    /// Default [`Self::poll_ready`] does not excuse a no-op for values
+    /// taken from [`Self::next`].
+    ///
+    /// Returns `Err` when requeue fails. Runners fail closed on that error
+    /// rather than dropping the observation.
+    fn restore_ready(&self, bind: &Self::Bind, obs: Observation) -> Result<()>;
 }

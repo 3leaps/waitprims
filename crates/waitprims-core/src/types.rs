@@ -387,6 +387,13 @@ pub struct PollCycleOutcome {
 }
 
 /// `poll_cycle_ack` body.
+///
+/// This is the commit. An admitted `poll_cycle_outcome` proposes
+/// `retained_through` / `retained_events`; those cursors and event ids
+/// are not committed until this message. Cancel, bound exhaustion, and a
+/// restart between outcome and ack must not silently advance cursors.
+/// Deferred observations replay in order when the runner restored them.
+/// This remains one of the six `agent-wait/v0` kinds.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PollCycleAck {
     /// Host-less capability tokens.

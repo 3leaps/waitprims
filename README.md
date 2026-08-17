@@ -39,6 +39,14 @@ There is no public `WaitSpec`, `live_wait_ack`, delivery message, or
 activation message. Delivery and activation stay off this wire as opaque
 refs when a caller uses them.
 
+Same-instant first-match ties use registration-set order (`TIE_RULE`).
+Consumed non-winner observations are restored for a later wait.
+
+Poll-cycle events and cursors are not committed until `poll_cycle_ack`
+(`POLL_ACK_RETENTION`). Deferred observations replay in order when
+restored. Cancel, bound exhaustion, and a restart before ack must not
+silently advance cursors.
+
 ## Crates
 
 | Crate | Role |

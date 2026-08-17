@@ -21,7 +21,7 @@ pub use script::Script;
 pub use seam::ScriptedReceipts;
 pub use waitprims_async::{
     event_surface_bytes, run_poll_cycle, BindHandle, Cancel, Clock, Error, Observation, Observer,
-    Result, TIE_RULE,
+    Result, POLL_ACK_RETENTION, TIE_RULE,
 };
 
 #[cfg(test)]
