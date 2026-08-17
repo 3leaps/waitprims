@@ -63,7 +63,7 @@ impl Observer for RestoreFailObserver {
     fn restore_ready(&self, bind: &Self::Bind, _obs: Observation) -> Result<()> {
         Err(ValidationError::new(
             "/observer/restore_ready",
-            &format!("restore_failed:{}", bind.registration_id().as_str()),
+            format!("restore_failed:{}", bind.registration_id().as_str()),
         )
         .into())
     }
