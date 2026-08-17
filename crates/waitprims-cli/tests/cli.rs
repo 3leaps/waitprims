@@ -47,17 +47,17 @@ fn validate_input(target: &Path) -> std::process::Output {
 }
 
 #[test]
-fn version_includes_dev_suffix() {
+fn version_prints_0_1_0() {
     let output = bin().arg("--version").output().expect("run --version");
     assert_eq!(output.status.code(), Some(0));
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("0.1.0-dev"),
+        stdout.contains("0.1.0"),
         "unexpected --version output: {stdout}"
     );
     assert!(
-        !stdout.split_whitespace().any(|tok| tok == "0.1.0"),
-        "version must stay 0.1.0-dev, not 0.1.0: {stdout}"
+        !stdout.contains("0.1.0-dev"),
+        "version must be 0.1.0, not 0.1.0-dev: {stdout}"
     );
 }
 

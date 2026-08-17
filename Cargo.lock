@@ -1138,7 +1138,7 @@ checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
 
 [[package]]
 name = "waitprims-async"
-version = "0.1.0-dev"
+version = "0.1.0"
 dependencies = [
  "tokio",
  "waitprims-core",
@@ -1146,7 +1146,7 @@ dependencies = [
 
 [[package]]
 name = "waitprims-cli"
-version = "0.1.0-dev"
+version = "0.1.0"
 dependencies = [
  "clap",
  "jsonschema",
@@ -1161,7 +1161,7 @@ dependencies = [
 
 [[package]]
 name = "waitprims-core"
-version = "0.1.0-dev"
+version = "0.1.0"
 dependencies = [
  "jsonschema",
  "ryu-js",
@@ -1174,7 +1174,7 @@ dependencies = [
 
 [[package]]
 name = "waitprims-testkit"
-version = "0.1.0-dev"
+version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
