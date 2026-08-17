@@ -25,6 +25,8 @@ pub use waitprims_async::{
 };
 
 #[cfg(test)]
+mod platform_proofs;
+#[cfg(test)]
 mod poll_proofs;
 #[cfg(test)]
 mod proofs;
