@@ -1,0 +1,143 @@
+# waitprims CI
+#
+# Not one required 5-wide PR gate. The required gate is `fast` on
+# ubuntu-latest. Hosted and arm64 jobs are native smokes.
+#
+# Five cells (native per arch; no cross, no musl, no macOS Intel,
+# no goneat-tools-runner):
+#   ubuntu-latest              x86_64-unknown-linux-gnu
+#   macos-14                   aarch64-apple-darwin
+#   windows-latest             x86_64-pc-windows-msvc
+#   ubuntu-latest-arm64-s      aarch64-unknown-linux-gnu
+#   windows-latest-arm64-s     aarch64-pc-windows-msvc
+#
+# platform-smoke-arm64 is same-repo only and is not a required gate.
+# Custom labels are declared in .github/actionlint.yaml (lint only;
+# that file does not deploy a runner).
+#
+# FakeClock is logical. Same-instant / restore / poll-ack use contract
+# timestamps and registration-set order, not wall sleeps. Windows has
+# no EINTR, UDS, or signal-driven cancel; Cancel is a watch token.
+#
+# rustc is workspace MSRV 1.88.0. Pin stays contract: agent-wait/v0 at
+# f1912957cde19b2b1e7809e430cc28dc417287cc.
+
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fast:
+    name: fast
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust 1.88.0
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.88.0
+          components: rustfmt, clippy
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace --locked
+
+  platform-smoke-hosted:
+    name: platform-smoke-hosted (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - runner: macos-14
+            target: aarch64-apple-darwin
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust 1.88.0
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.88.0
+          components: clippy
+
+      - name: Verify native host
+        run: |
+          set -euo pipefail
+          host=$(rustc -vV | awk '/^host:/{print $2}')
+          test "$host" = "${{ matrix.target }}"
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace --locked
+
+  # Same-repo only. Not a required PR gate. Fork PRs skip these cells.
+  platform-smoke-arm64:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    name: platform-smoke-arm64 (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest-arm64-s
+            target: aarch64-unknown-linux-gnu
+          - runner: windows-latest-arm64-s
+            target: aarch64-pc-windows-msvc
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust 1.88.0
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.88.0
+          components: clippy
+
+      - name: Verify native host
+        run: |
+          set -euo pipefail
+          host=$(rustc -vV | awk '/^host:/{print $2}')
+          test "$host" = "${{ matrix.target }}"
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace --locked

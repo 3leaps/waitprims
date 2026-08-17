@@ -420,6 +420,22 @@ mod tests {
     }
 
     #[test]
+    fn one_millisecond_is_a_distinct_logical_instant() {
+        // Contract timestamps stay distinct. FakeClock is logical; this is
+        // not a wall-sleep uniqueness key.
+        let a = Timestamp::parse("2026-08-15T16:05:00.001000Z").unwrap();
+        let b = Timestamp::parse("2026-08-15T16:05:00.002000Z").unwrap();
+        assert_ne!(a, b);
+        assert_eq!(a.compare(&b), -1);
+        let micro_a = Timestamp::parse("2026-08-15T16:05:00.000001Z").unwrap();
+        let micro_b = Timestamp::parse("2026-08-15T16:05:00.000002Z").unwrap();
+        assert_ne!(micro_a, micro_b);
+        assert_eq!(micro_a.compare(&micro_b), -1);
+        let padded = Timestamp::parse("2026-08-15T16:05:00.001Z").unwrap();
+        assert_eq!(a, padded);
+    }
+
+    #[test]
     fn saturating_add_and_duration_until_round_trip() {
         let start = Timestamp::parse("2026-08-15T16:00:00Z").unwrap();
         let later = start.saturating_add(std::time::Duration::from_secs(90));

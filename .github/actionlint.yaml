@@ -1,0 +1,12 @@
+# actionlint configuration
+# https://github.com/rhysd/actionlint/blob/main/docs/config.md
+#
+# Custom labels for 3leaps GitHub org larger/managed runners (not in
+# actionlint's default label set). Without these entries actionlint reports
+# unknown labels as errors.
+#
+# This only silences actionlint. It does not deploy a runner.
+self-hosted-runner:
+  labels:
+    - ubuntu-latest-arm64-s
+    - windows-latest-arm64-s

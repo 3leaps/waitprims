@@ -71,6 +71,12 @@ cargo test
 cargo build -p waitprims-cli
 ```
 
+The required CI gate is `fast` on `ubuntu-latest` (`cargo fmt --check`,
+`cargo clippy --workspace --all-targets -- -D warnings`,
+`cargo test --workspace --locked`, MSRV 1.88.0). Hosted and arm64
+smokes cover five native cells; arm64 is same-repo only and is not a
+required gate. See [`.github/CI.md`](.github/CI.md).
+
 The diagnostic binary lands at `target/debug/waitprims`.
 
 ```bash
