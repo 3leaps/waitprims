@@ -72,7 +72,7 @@ help: ## Show available targets
 	@echo "  release-sign       Sign checksum manifests (minisign + PGP)"
 	@echo "  release-export-keys Export public signing keys"
 	@echo "  release-verify     Verify checksums, signatures, and keys"
-	@echo "  release-notes      Copy release notes into dist (before checksums)"
+	@echo "  release-notes      Copy RELEASE_NOTES.md into dist (before checksums)"
 	@echo "  release-upload     Upload signed artifacts to GitHub"
 	@echo "  release            Full signing workflow (clean -> upload)"
 	@echo ""
@@ -256,12 +256,21 @@ release-preflight: ## Verify all pre-tag requirements (REQUIRED before tagging)
 	@$(MAKE) version-check --silent
 	@echo "[ok] Version synced"
 	@version_file=$$(tr -d ' \t\r\n' < $(VERSION_FILE)); \
-	release_notes="docs/releases/v$$version_file.md"; \
-	if [ ! -f "$$release_notes" ]; then \
-		echo "[!!] Release notes not found at $$release_notes"; \
+	if [ ! -f RELEASE_NOTES.md ]; then \
+		echo "[!!] RELEASE_NOTES.md not found (signed / GitHub payload)"; \
+		exit 1; \
+	fi; \
+	if ! grep -qE "^## v$$version_file( |$$)" RELEASE_NOTES.md; then \
+		echo "[!!] RELEASE_NOTES.md has no heading for v$$version_file"; \
+		exit 1; \
+	fi; \
+	echo "[ok] RELEASE_NOTES.md has v$$version_file"; \
+	evergreen="docs/releases/v$$version_file.md"; \
+	if [ ! -f "$$evergreen" ]; then \
+		echo "[!!] Evergreen notes not found at $$evergreen"; \
 		exit 1; \
 	fi
-	@echo "[ok] Release notes exist"
+	@echo "[ok] Evergreen notes exist"
 	@echo "[..] Verifying local/remote sync..."
 	@if ! git fetch origin; then \
 		echo "[!!] git fetch origin failed; cannot verify local/remote sync"; \
@@ -300,17 +309,23 @@ release-download: ## Download release assets from GitHub
 	fi
 	./scripts/download-release-assets.sh $(WAITPRIMS_RELEASE_TAG) $(DIST_RELEASE)
 
-release-notes: ## Copy release notes into dist before checksums
-	@src="docs/releases/$(WAITPRIMS_RELEASE_TAG).md"; \
+release-notes: ## Copy RELEASE_NOTES.md into dist before checksums
+	@src="RELEASE_NOTES.md"; \
 	if [ ! -f "$$src" ]; then \
-		echo "[!!] Release notes not found at $$src"; \
+		echo "[!!] RELEASE_NOTES.md not found"; \
 		exit 1; \
 	fi; \
+	ver="$(VERSION)"; \
+	if ! grep -qE "^## v$$ver( |$$)" "$$src"; then \
+		echo "[!!] RELEASE_NOTES.md has no heading for v$$ver"; \
+		exit 1; \
+	fi; \
+	mkdir -p "$(DIST_RELEASE)"; \
 	cp "$$src" "$(DIST_RELEASE)/release-notes-$(WAITPRIMS_RELEASE_TAG).md"; \
-	echo "[ok] Copied release notes into the checksum set"
+	echo "[ok] Copied RELEASE_NOTES.md into the checksum set"
 
 release-checksums: ## Generate SHA256SUMS and SHA512SUMS
-	./scripts/generate-checksums.sh $(DIST_RELEASE)
+	./scripts/generate-checksums.sh $(DIST_RELEASE) $(WAITPRIMS_RELEASE_TAG)
 
 release-sign: ## Sign checksum manifests (requires WAITPRIMS_MINISIGN_KEY)
 	@if [ -z "$(WAITPRIMS_MINISIGN_KEY)" ]; then \

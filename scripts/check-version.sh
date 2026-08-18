@@ -87,6 +87,18 @@ else
 	fi
 fi
 
+RELEASE_NOTES="$PROJECT_ROOT/RELEASE_NOTES.md"
+if [[ ! -f "$RELEASE_NOTES" ]]; then
+	error "RELEASE_NOTES.md not found: $RELEASE_NOTES"
+	exit 1
+fi
+if grep -qE "^## v${VERSION_FROM_FILE}( |$)" "$RELEASE_NOTES"; then
+	ok "RELEASE_NOTES.md has heading for v$VERSION_FROM_FILE"
+else
+	error "RELEASE_NOTES.md has no heading for v$VERSION_FROM_FILE"
+	exit 1
+fi
+
 info "Checking crate Cargo.toml files..."
 
 FAILED_CRATES=()

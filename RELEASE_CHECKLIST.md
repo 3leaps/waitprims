@@ -27,8 +27,12 @@ committed `.a`. CI never holds signing keys.
 - [ ] Update `CHANGELOG.md`
   - **Do not skip footer links**: add `[X.Y.Z]` compare link and re-anchor
     `[Unreleased]` to compare from the new tag to `HEAD`
-- [ ] Update `RELEASE_NOTES.md` (latest three cuts, newest first)
-- [ ] Create release notes: `docs/releases/vX.Y.Z.md`
+- [ ] Update `RELEASE_NOTES.md` (latest three cuts, newest first).
+      This is the **signed / GitHub payload**. `make release-notes`
+      copies it to `dist/release/release-notes-vX.Y.Z.md`.
+- [ ] Create evergreen notes: `docs/releases/vX.Y.Z.md`.
+      This file is the durable archive after `RELEASE_NOTES.md`
+      purges older cuts. It is **not** copied into the signed set.
 
 ### Pre-tag quality gates
 
@@ -38,7 +42,8 @@ committed `.a`. CI never holds signing keys.
   1. Working tree clean check
   2. `make pr-final` — `prepush` (fmt, clippy, locked tests, **version consistency**)
   3. `make version-check` — `VERSION`, `Cargo.toml`, crate workspace versions
-  4. Release notes exist at `docs/releases/vX.Y.Z.md`
+  4. `RELEASE_NOTES.md` has a `## vX.Y.Z` heading; evergreen
+     `docs/releases/vX.Y.Z.md` exists
   5. Local/remote sync (no unpushed or unpulled commits)
 
   **Must pass before pushing or tagging.**
@@ -133,15 +138,20 @@ export WAITPRIMS_GPG_HOMEDIR=/path/to/gpg/homedir  # optional
    make release-download
    ```
 
-3. **Copy release notes into dist** (before checksums)
+3. **Copy `RELEASE_NOTES.md` into dist** (before checksums)
 
    ```bash
    make release-notes
    ```
 
-   Copies `docs/releases/vX.Y.Z.md` to `dist/release/release-notes-vX.Y.Z.md`
-   so the notes are in the signed checksum set. Missing notes is a hard
-   failure. Do not copy notes after signing.
+   Copies `RELEASE_NOTES.md` to `dist/release/release-notes-vX.Y.Z.md`
+   so the landing notes (latest three cuts) are in the signed checksum
+   set and become the GitHub release body. `docs/releases/vX.Y.Z.md`
+   stays in-tree as the evergreen archive and is not copied. Missing
+   `RELEASE_NOTES.md` or a missing `## vX.Y.Z` heading is a hard
+   failure. Do not copy notes after signing. Start from
+   `make release-clean` so leftover `release-notes-v*` files from an
+   earlier cut are not sitting in `dist/release/`.
 
 4. **Generate checksum manifests**
 
@@ -149,8 +159,9 @@ export WAITPRIMS_GPG_HOMEDIR=/path/to/gpg/homedir  # optional
    make release-checksums
    ```
 
-   Produces: `SHA256SUMS`, `SHA512SUMS` covering archives, SBOM, licenses,
-   and the copied release notes.
+   Produces: `SHA256SUMS`, `SHA512SUMS` covering **this tag's** archives,
+   SBOM, licenses, and `release-notes-vX.Y.Z.md`. Leftover files from
+   an earlier cut are omitted and reported.
 
 5. **Sign checksum manifests** (minisign + PGP)
 
@@ -263,7 +274,7 @@ suffix in the commit message is a convention marking a development snapshot
 | `make release-sign`              | Sign checksums with minisign + PGP (requires MFA/hardware token)               |
 | `make release-export-keys`       | Export public signing keys                                                     |
 | `make release-verify`            | Verify checksums, signatures, and keys                                         |
-| `make release-notes`             | Copy release notes into dist **before** checksums (signed set)                 |
+| `make release-notes`             | Copy `RELEASE_NOTES.md` into dist **before** checksums (signed set)            |
 | `make release-upload`            | Upload signed artifacts to GitHub                                              |
 | `make release`                   | Full workflow (clean -> upload)                                                |
 
@@ -279,11 +290,16 @@ export WAITPRIMS_MINISIGN_KEY=/path/to/signing.key
 
 ### "No release notes found"
 
-Create the release notes file:
+The signed payload is `RELEASE_NOTES.md` (latest three cuts). The
+evergreen archive is `docs/releases/vX.Y.Z.md`.
 
 ```bash
+# Landing / signed / GitHub body (purge to three cuts)
+# Edit RELEASE_NOTES.md — heading must be `## vX.Y.Z`
+
+# Evergreen archive (not copied into dist)
 mkdir -p docs/releases
-# Write release notes to docs/releases/vX.Y.Z.md
+# Write docs/releases/vX.Y.Z.md
 ```
 
 ### Version mismatch in prepush or preflight
