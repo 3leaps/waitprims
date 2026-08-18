@@ -195,7 +195,12 @@ version-check: ## Validate version consistency across files
 # 1. Pre-tag: make release-preflight
 # 2. Tag and push: git tag vX.Y.Z && git push origin vX.Y.Z
 # 3. Wait for GitHub Actions release workflow to create a draft release
-# 4. Sign locally: make release (or individual steps below)
+# 4. Sign locally: make release (or individual leaf targets)
+#
+# Leaf targets have no write-chain precursors (same as sysprims).
+# Only `make release` walks clean → download → notes → checksums →
+# sign → export-keys → upload (verify once via upload).
+# `make release-export-keys` must not re-clean or re-download.
 #
 # Environment variables:
 #   WAITPRIMS_MINISIGN_KEY  - Path to minisign secret key (required for sign)
@@ -278,14 +283,14 @@ release-clean: ## Remove dist/release contents
 	rm -rf $(DIST_RELEASE)
 	@echo "[ok] Release directory cleaned"
 
-release-download: release-clean ## Download release assets from GitHub
+release-download: ## Download release assets from GitHub
 	@if [ -z "$(WAITPRIMS_RELEASE_TAG)" ] || [ "$(WAITPRIMS_RELEASE_TAG)" = "v" ]; then \
 		echo "Error: No release tag found. Set WAITPRIMS_RELEASE_TAG=vX.Y.Z"; \
 		exit 1; \
 	fi
 	./scripts/download-release-assets.sh $(WAITPRIMS_RELEASE_TAG) $(DIST_RELEASE)
 
-release-notes: release-download ## Copy release notes into dist before checksums
+release-notes: ## Copy release notes into dist before checksums
 	@src="docs/releases/$(WAITPRIMS_RELEASE_TAG).md"; \
 	if [ ! -f "$$src" ]; then \
 		echo "[!!] Release notes not found at $$src"; \
@@ -294,10 +299,10 @@ release-notes: release-download ## Copy release notes into dist before checksums
 	cp "$$src" "$(DIST_RELEASE)/release-notes-$(WAITPRIMS_RELEASE_TAG).md"; \
 	echo "[ok] Copied release notes into the checksum set"
 
-release-checksums: release-notes ## Generate SHA256SUMS and SHA512SUMS
+release-checksums: ## Generate SHA256SUMS and SHA512SUMS
 	./scripts/generate-checksums.sh $(DIST_RELEASE)
 
-release-sign: release-checksums ## Sign checksum manifests (requires WAITPRIMS_MINISIGN_KEY)
+release-sign: ## Sign checksum manifests (requires WAITPRIMS_MINISIGN_KEY)
 	@if [ -z "$(WAITPRIMS_MINISIGN_KEY)" ]; then \
 		echo "Error: WAITPRIMS_MINISIGN_KEY not set"; \
 		echo ""; \
@@ -310,7 +315,7 @@ release-sign: release-checksums ## Sign checksum manifests (requires WAITPRIMS_M
 	WAITPRIMS_GPG_HOMEDIR=$(WAITPRIMS_GPG_HOMEDIR) \
 	./scripts/sign-release-assets.sh $(WAITPRIMS_RELEASE_TAG) $(DIST_RELEASE)
 
-release-export-keys: release-sign ## Export public signing keys
+release-export-keys: ## Export public signing keys
 	WAITPRIMS_MINISIGN_KEY=$(WAITPRIMS_MINISIGN_KEY) \
 	WAITPRIMS_MINISIGN_PUB=$(WAITPRIMS_MINISIGN_PUB) \
 	WAITPRIMS_PGP_KEY_ID=$(WAITPRIMS_PGP_KEY_ID) \
@@ -334,10 +339,15 @@ release-verify: release-verify-checksums release-verify-signatures release-verif
 release-upload: release-verify ## Upload signed artifacts to GitHub release
 	./scripts/upload-release-assets.sh $(WAITPRIMS_RELEASE_TAG) $(DIST_RELEASE)
 
-# Walk the serialized write chain once, then verify and upload.
-# `make -j release` still cannot overlap stages (.NOTPARALLEL + prereqs).
+# Serialized walk only. Leaves stay independent so mid-chain targets
+# do not re-run clean/download. `.NOTPARALLEL` still blocks `make -j`.
+# Verify runs once, as the `release-upload` grouping prerequisite.
 release: release-guard-tag-version ## Full signing workflow (after CI build)
+	$(MAKE) release-clean
+	$(MAKE) release-download
+	$(MAKE) release-notes
+	$(MAKE) release-checksums
+	$(MAKE) release-sign
 	$(MAKE) release-export-keys
-	$(MAKE) release-verify
 	$(MAKE) release-upload
 	@echo "[ok] Release $(WAITPRIMS_RELEASE_TAG) complete"

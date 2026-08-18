@@ -4,6 +4,20 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.1.2]
+
+Release-kit hygiene. No library API change is intended. Workspace
+version is 0.1.2 so a maintainer can tag a signed GitHub release.
+This commit does not create a tag, publish to crates.io, or change
+visibility.
+
+- Makefile release leaf targets no longer depend on earlier write
+  stages. `make release-export-keys` does not re-clean or re-download
+- `make release` is the only serialized walk: clean, download, notes,
+  checksums, sign, export-keys, upload (verify once via upload)
+- CLI `--version` test tracks the workspace `VERSION` file so a
+  patch bump does not require a hardcoded pin
+
 ## [0.1.1]
 
 Signed-release kit. No library API change is intended. Workspace version
@@ -34,6 +48,7 @@ APIs may still move.
 - CI matrix already on main (`fast` plus hosted smokes; arm64 labs
   same-repo only)
 
-[Unreleased]: https://github.com/3leaps/waitprims/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/3leaps/waitprims/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/3leaps/waitprims/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/3leaps/waitprims/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/3leaps/waitprims/releases/tag/v0.1.0

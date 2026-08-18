@@ -196,6 +196,11 @@ export WAITPRIMS_GPG_HOMEDIR=/path/to/gpg/homedir  # optional
 
    The release is a draft until this step. Do not announce until after this.
 
+Leaf targets do **not** depend on earlier write stages. `make
+release-export-keys` (or any mid-chain target) must not wipe
+`dist/release/` or re-download. Only `make release` walks the full
+sequence.
+
 Or run the full signing + upload workflow in one command:
 
 ```bash

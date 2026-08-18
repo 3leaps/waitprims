@@ -47,17 +47,23 @@ fn validate_input(target: &Path) -> std::process::Output {
 }
 
 #[test]
-fn version_prints_0_1_1() {
+fn version_prints_workspace_version() {
+    let expected = std::fs::read_to_string(workspace_root().join("VERSION"))
+        .expect("read VERSION")
+        .trim()
+        .to_string();
+    assert!(!expected.is_empty(), "VERSION file is empty");
     let output = bin().arg("--version").output().expect("run --version");
     assert_eq!(output.status.code(), Some(0));
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("0.1.1"),
-        "unexpected --version output: {stdout}"
+        stdout.contains(&expected),
+        "unexpected --version output: {stdout} (want {expected})"
     );
+    let dev_form = format!("{expected}-dev");
     assert!(
-        !stdout.contains("0.1.1-dev"),
-        "version must be 0.1.1, not 0.1.1-dev: {stdout}"
+        !stdout.contains(&dev_form),
+        "version must be {expected}, not {dev_form}: {stdout}"
     );
 }
 
