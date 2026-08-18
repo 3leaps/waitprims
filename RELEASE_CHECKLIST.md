@@ -1,7 +1,7 @@
 # Release Checklist
 
 This document walks maintainers through the write/prep flow and the later
-human MFA sign/upload flow for each waitprims release.
+maintainer MFA sign/upload flow for each waitprims release.
 
 waitprims is Rust only. There is no Go bindings workflow, no path-prefixed
 module tag, no TypeScript/npm/N-API publish, no FFI tarball, and no
@@ -102,7 +102,7 @@ One annotated `v*` tag. Do not add a path-prefixed module tag.
   - SBOM (`sbom-X.Y.Z.cdx.json`)
   - Licenses (`LICENSE-MIT`, `LICENSE-APACHE`)
 
-## 2. Human MFA sign / upload (local machine)
+## 2. Maintainer MFA sign / upload (local machine)
 
 > **Note**: MFA is required for signing. Signing keys are protected by
 > hardware token. The maintainer must be physically present to complete

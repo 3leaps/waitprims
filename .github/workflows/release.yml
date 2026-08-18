@@ -2,7 +2,7 @@
 #
 # On a v* tag, build unsigned CLI archives for the platforms this repo
 # already smokes, attach SBOM + licenses, and open a draft GitHub release.
-# CI does not hold signing keys. A human signs and uploads locally.
+# CI does not hold signing keys. A maintainer signs and uploads locally.
 
 name: Release
 

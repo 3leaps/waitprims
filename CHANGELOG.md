@@ -7,7 +7,7 @@ All notable changes to this project are documented in this file.
 ## [0.1.1]
 
 Signed-release kit. No library API change is intended. Workspace version
-is 0.1.1 so a later human tag can cut a signed GitHub release. This
+is 0.1.1 so a later maintainer tag can cut a signed GitHub release. This
 commit does not create a tag, publish to crates.io, or change visibility.
 
 - VERSION is the version SSOT (`make version-sync`, `make version-check`)

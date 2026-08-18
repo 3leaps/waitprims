@@ -6,7 +6,7 @@
 # Release notes must already be in the signed checksum manifests
 # (copied before `make release-checksums`). This script does not add
 # unsigned notes after signing.
-# Leaves the GitHub release as a draft. Publishing is a separate human step.
+# Leaves the GitHub release as a draft. Publishing is a separate maintainer step.
 # Requires: gh CLI authenticated with write permissions
 set -euo pipefail
 
