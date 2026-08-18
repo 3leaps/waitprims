@@ -229,8 +229,8 @@ sibling checklists' registry step (ipcprims npm): order, first-cut
 vs later cuts, and a verify loop. Token and owners stay out of the
 tree. Do not put a crates.io token in env files in this repo.
 
-`make release-check` / `cargo package --workspace` only builds
-tarballs. That is **not** a registry upload.
+`make release-check` / `cargo package --workspace` creates and
+verifies local tarballs. That is **not** a registry upload.
 
 ### What gets published
 
@@ -259,21 +259,26 @@ Workspace `publish` stays `false`. The three libraries opt in.
 From a clean checkout of the **tag** (not a dirty worktree):
 
 ```bash
-git checkout "v$(cat VERSION)"
+VERSION=$(cat VERSION)
+git checkout "v${VERSION}"
 cargo publish --dry-run -p waitprims-core
 cargo publish -p waitprims-core
-# wait until `cargo search waitprims-core` shows this VERSION
+# wait until this VERSION is on the index
+cargo info "waitprims-core@${VERSION}"
 cargo publish --dry-run -p waitprims-async
 cargo publish -p waitprims-async
+cargo info "waitprims-async@${VERSION}"
 cargo publish --dry-run -p waitprims-testkit
 cargo publish -p waitprims-testkit
 ```
 
-- [ ] Dry-run then publish **core**, then **async**, then **testkit**
+- [ ] Dry-run then publish **core**, wait for the index, then **async**,
+      wait for the index, then **testkit**
 - [ ] Do **not** `cargo publish -p waitprims-cli` (must fail closed:
       `cannot be published`)
-- [ ] Confirm the index before the next crate. async and testkit
-      resolve their path deps as crates.io versions.
+- [ ] Confirm each predecessor with `cargo info <crate>@${VERSION}`
+      before the next publish. async and testkit resolve their path
+      deps as crates.io versions.
 
 Negative control (optional):
 
@@ -298,9 +303,10 @@ text becomes true only after this step.
 - [ ] Verify the release is public: `gh release view v$(cat VERSION)`
 - [ ] Verify checksums match: download and verify locally
 - [ ] Verify signatures with public keys
-- [ ] After a crates.io cue: each library crate shows this VERSION
-      (`cargo search waitprims-core`, same for async and testkit).
-      On the first cut, no older versions should appear.
+- [ ] After a crates.io cue: each library crate has this VERSION
+      (`cargo info waitprims-core@${VERSION}`, same for async and
+      testkit). Search is not a version-history proof; no-backfill
+      is policy (section 3), not a `cargo search` check.
 
 ### Verification example
 
