@@ -20,8 +20,6 @@ does not publish to crates.io or change repository visibility.
   the upload grouping prerequisite.
 - CLI `--version` test tracks the workspace `VERSION` file.
 - Makefile `precommit` and `pr-final` sit beside `prepush`.
-- Signed / GitHub notes are this file. `docs/releases/` is the
-  evergreen archive.
 
 ### Upgrade notes
 

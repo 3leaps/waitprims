@@ -72,7 +72,7 @@ help: ## Show available targets
 	@echo "  release-sign       Sign checksum manifests (minisign + PGP)"
 	@echo "  release-export-keys Export public signing keys"
 	@echo "  release-verify     Verify checksums, signatures, and keys"
-	@echo "  release-notes      Copy RELEASE_NOTES.md into dist (before checksums)"
+	@echo "  release-notes      Copy docs/releases/vX.Y.Z.md into dist (before checksums)"
 	@echo "  release-upload     Upload signed artifacts to GitHub"
 	@echo "  release            Full signing workflow (clean -> upload)"
 	@echo ""
@@ -257,7 +257,7 @@ release-preflight: ## Verify all pre-tag requirements (REQUIRED before tagging)
 	@echo "[ok] Version synced"
 	@version_file=$$(tr -d ' \t\r\n' < $(VERSION_FILE)); \
 	if [ ! -f RELEASE_NOTES.md ]; then \
-		echo "[!!] RELEASE_NOTES.md not found (signed / GitHub payload)"; \
+		echo "[!!] RELEASE_NOTES.md not found"; \
 		exit 1; \
 	fi; \
 	if ! grep -qE "^## v$$version_file( |$$)" RELEASE_NOTES.md; then \
@@ -265,12 +265,23 @@ release-preflight: ## Verify all pre-tag requirements (REQUIRED before tagging)
 		exit 1; \
 	fi; \
 	echo "[ok] RELEASE_NOTES.md has v$$version_file"; \
-	evergreen="docs/releases/v$$version_file.md"; \
-	if [ ! -f "$$evergreen" ]; then \
-		echo "[!!] Evergreen notes not found at $$evergreen"; \
+	cut_notes="docs/releases/v$$version_file.md"; \
+	if [ ! -f "$$cut_notes" ]; then \
+		echo "[!!] Per-cut notes not found at $$cut_notes"; \
+		echo "    Extract the v$$version_file section from RELEASE_NOTES.md"; \
+		exit 1; \
+	fi; \
+	if ! grep -qE "^# v$$version_file( |$$)" "$$cut_notes"; then \
+		echo "[!!] $$cut_notes must start from the v$$version_file cut"; \
+		exit 1; \
+	fi; \
+	other=$$(grep -E "^#{1,2} v[0-9]+\.[0-9]+\.[0-9]+" "$$cut_notes" | grep -vE "v$$version_file( |$$)" || true); \
+	if [ -n "$$other" ]; then \
+		echo "[!!] $$cut_notes must contain only the v$$version_file section:"; \
+		echo "$$other"; \
 		exit 1; \
 	fi
-	@echo "[ok] Evergreen notes exist"
+	@echo "[ok] Per-cut notes exist"
 	@echo "[..] Verifying local/remote sync..."
 	@if ! git fetch origin; then \
 		echo "[!!] git fetch origin failed; cannot verify local/remote sync"; \
@@ -309,20 +320,16 @@ release-download: ## Download release assets from GitHub
 	fi
 	./scripts/download-release-assets.sh $(WAITPRIMS_RELEASE_TAG) $(DIST_RELEASE)
 
-release-notes: ## Copy RELEASE_NOTES.md into dist before checksums
-	@src="RELEASE_NOTES.md"; \
+release-notes: ## Copy docs/releases/vX.Y.Z.md into dist before checksums
+	@src="docs/releases/$(WAITPRIMS_RELEASE_TAG).md"; \
 	if [ ! -f "$$src" ]; then \
-		echo "[!!] RELEASE_NOTES.md not found"; \
-		exit 1; \
-	fi; \
-	ver="$(VERSION)"; \
-	if ! grep -qE "^## v$$ver( |$$)" "$$src"; then \
-		echo "[!!] RELEASE_NOTES.md has no heading for v$$ver"; \
+		echo "[!!] Per-cut notes not found at $$src"; \
+		echo "    Extract that version's section from RELEASE_NOTES.md"; \
 		exit 1; \
 	fi; \
 	mkdir -p "$(DIST_RELEASE)"; \
 	cp "$$src" "$(DIST_RELEASE)/release-notes-$(WAITPRIMS_RELEASE_TAG).md"; \
-	echo "[ok] Copied RELEASE_NOTES.md into the checksum set"
+	echo "[ok] Copied $$src into the checksum set"
 
 release-checksums: ## Generate SHA256SUMS and SHA512SUMS
 	./scripts/generate-checksums.sh $(DIST_RELEASE) $(WAITPRIMS_RELEASE_TAG)

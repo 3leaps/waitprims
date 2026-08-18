@@ -3,8 +3,8 @@
 # Usage: generate-checksums.sh [dir] [tag]
 #
 # Checksums only this tag's artifacts, licenses, and the copied
-# RELEASE_NOTES.md payload (release-notes-<tag>.md). Leftover files
-# from an earlier cut are ignored (and reported).
+# per-cut notes (docs/releases/vX.Y.Z.md → release-notes-<tag>.md).
+# Leftover files from an earlier cut are ignored (and reported).
 set -euo pipefail
 
 DIR=${1:-dist/release}
