@@ -224,30 +224,83 @@ gh release edit v$(cat VERSION) --draft=false
 ## 3. crates.io (library crates only)
 
 Do this **after** the GitHub release is signed and undrafted, and only
-when the principal or Echo lead cues publish. Token and owners stay
-out of the tree.
+when the principal or Echo lead cues publish. Depth here matches the
+sibling checklists' registry step (ipcprims npm): order, first-cut
+vs later cuts, and a verify loop. Token and owners stay out of the
+tree. Do not put a crates.io token in env files in this repo.
+
+`make release-check` / `cargo package --workspace` only builds
+tarballs. That is **not** a registry upload.
+
+### What gets published
+
+| Crate | crates.io |
+|-------|-----------|
+| `waitprims-core` | yes (first) |
+| `waitprims-async` | yes (after core is on the index) |
+| `waitprims-testkit` | yes (after async is on the index) |
+| `waitprims-cli` | **never** (`publish = false`) |
+
+Workspace `publish` stays `false`. The three libraries opt in.
+
+### First cut vs later cuts
+
+- **First upload (this train, v0.1.3):** publish **only** version
+  `0.1.3`. `v0.1.0`, `v0.1.1`, and `v0.1.2` were git/GitHub cuts
+  with `publish = false`. They are **not** on crates.io and are
+  **not** backfilled. crates.io will show `0.1.3` as the first
+  version of each library crate.
+- **Later cuts:** publish the new `VERSION` only. Older registry
+  versions stay. A version cannot be overwritten; a mistake is a
+  new patch (or a yank, which does not delete the tarball).
+
+### Publish steps (cued)
+
+From a clean checkout of the **tag** (not a dirty worktree):
 
 ```bash
+git checkout "v$(cat VERSION)"
+cargo publish --dry-run -p waitprims-core
 cargo publish -p waitprims-core
+# wait until `cargo search waitprims-core` shows this VERSION
+cargo publish --dry-run -p waitprims-async
 cargo publish -p waitprims-async
+cargo publish --dry-run -p waitprims-testkit
 cargo publish -p waitprims-testkit
 ```
 
-Do **not** publish `waitprims-cli`. `make release-check` runs
-`cargo package --workspace` (packages all workspace crates,
-including the unpublished CLI) and never runs `cargo publish`.
+- [ ] Dry-run then publish **core**, then **async**, then **testkit**
+- [ ] Do **not** `cargo publish -p waitprims-cli` (must fail closed:
+      `cannot be published`)
+- [ ] Confirm the index before the next crate. async and testkit
+      resolve their path deps as crates.io versions.
 
-After upload, consumers can replace a git tag pin with:
+Negative control (optional):
+
+```bash
+cargo publish --dry-run -p waitprims-cli
+# expected: error, crate cannot be published
+```
+
+### After upload
+
+Consumers can replace a git tag pin with:
 
 ```toml
 waitprims-async = "0.1"
 ```
+
+docs.rs builds from the crates.io tarball. Evergreen README install
+text becomes true only after this step.
 
 ## 4. Post-release verification
 
 - [ ] Verify the release is public: `gh release view v$(cat VERSION)`
 - [ ] Verify checksums match: download and verify locally
 - [ ] Verify signatures with public keys
+- [ ] After a crates.io cue: each library crate shows this VERSION
+      (`cargo search waitprims-core`, same for async and testkit).
+      On the first cut, no older versions should appear.
 
 ### Verification example
 
