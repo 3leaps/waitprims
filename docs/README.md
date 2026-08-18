@@ -85,3 +85,4 @@ Latest three cuts: [`RELEASE_NOTES.md`](../RELEASE_NOTES.md)
 (including [`v0.1.0`](releases/v0.1.0.md)). `CHANGELOG.md` keeps
 the latest ten (not yet over that). The signed-release flow is
 [`RELEASE_CHECKLIST.md`](../RELEASE_CHECKLIST.md).
+Process records live in [`decisions/`](decisions/).
