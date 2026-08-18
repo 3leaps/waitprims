@@ -264,10 +264,10 @@ git checkout "v${VERSION}"
 cargo publish --dry-run -p waitprims-core
 cargo publish -p waitprims-core
 # wait until this VERSION is on the index
-cargo info "waitprims-core@${VERSION}"
+cargo info --registry crates-io "waitprims-core@${VERSION}"
 cargo publish --dry-run -p waitprims-async
 cargo publish -p waitprims-async
-cargo info "waitprims-async@${VERSION}"
+cargo info --registry crates-io "waitprims-async@${VERSION}"
 cargo publish --dry-run -p waitprims-testkit
 cargo publish -p waitprims-testkit
 ```
@@ -276,9 +276,11 @@ cargo publish -p waitprims-testkit
       wait for the index, then **testkit**
 - [ ] Do **not** `cargo publish -p waitprims-cli` (must fail closed:
       `cannot be published`)
-- [ ] Confirm each predecessor with `cargo info <crate>@${VERSION}`
-      before the next publish. async and testkit resolve their path
-      deps as crates.io versions.
+- [ ] Confirm each predecessor with
+      `cargo info --registry crates-io <crate>@${VERSION}`
+      before the next publish. Bare `cargo info` can hit the local
+      workspace and is not an index proof. async and testkit resolve
+      their path deps as crates.io versions.
 
 Negative control (optional):
 
@@ -304,9 +306,10 @@ text becomes true only after this step.
 - [ ] Verify checksums match: download and verify locally
 - [ ] Verify signatures with public keys
 - [ ] After a crates.io cue: each library crate has this VERSION
-      (`cargo info waitprims-core@${VERSION}`, same for async and
-      testkit). Search is not a version-history proof; no-backfill
-      is policy (section 3), not a `cargo search` check.
+      (`cargo info --registry crates-io waitprims-core@${VERSION}`,
+      same for async and testkit). Bare `cargo info` can resolve the
+      workspace and is not an index proof. Search is not a
+      version-history proof; no-backfill is policy (section 3).
 
 ### Verification example
 
