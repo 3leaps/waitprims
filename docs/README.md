@@ -62,4 +62,5 @@ schema. Point callers at [`schemas/v0/`](../schemas/v0/). The schema
 
 Latest three cuts: [`RELEASE_NOTES.md`](../RELEASE_NOTES.md).
 Per-version notes live in [`releases/`](releases/). The signed-release
-flow is [`RELEASE_CHECKLIST.md`](../RELEASE_CHECKLIST.md).
+flow is [`RELEASE_CHECKLIST.md`](../RELEASE_CHECKLIST.md). Library
+crates publish to crates.io; the diagnostic CLI does not.

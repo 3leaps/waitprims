@@ -4,6 +4,19 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.1.3]
+
+crates.io enablement for the library crates. No library API change
+is intended.
+
+- `waitprims-core`, `waitprims-async`, and `waitprims-testkit` set
+  `publish = true` with docs.rs URLs and crate READMEs
+- `waitprims-cli` stays unpublished (workspace `publish` remains
+  `false`)
+- `make release-check` packages `waitprims-core`. Dependents
+  package after that crate is on the registry
+- README documents the crates.io pin; git tag pin still works
+
 ## [0.1.2]
 
 Release-kit hygiene. No library API change is intended. This
@@ -51,7 +64,8 @@ APIs may still move.
 - CI matrix already on main (`fast` plus hosted smokes; arm64 labs
   same-repo only)
 
-[Unreleased]: https://github.com/3leaps/waitprims/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/3leaps/waitprims/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/3leaps/waitprims/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/3leaps/waitprims/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/3leaps/waitprims/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/3leaps/waitprims/releases/tag/v0.1.0

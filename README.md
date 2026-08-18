@@ -58,8 +58,15 @@ silently advance cursors.
 
 ## Status
 
-This is the first tagged library (`0.1.0`). Pin from git
-(`git = "…", tag = "v0.1.0"`). There is no crates.io crate. APIs may
+Tagged library (`0.1.3`). Library crates publish to crates.io:
+
+```toml
+waitprims-core = "0.1"
+waitprims-async = "0.1"
+waitprims-testkit = "0.1"
+```
+
+The diagnostic CLI is not published. A git tag pin still works. APIs may
 still move.
 
 Pinned `contract: agent-wait/v0` at Crucible `f1912957cde19b2b1e7809e430cc28dc417287cc`. See [`schemas/v0/PIN.md`](schemas/v0/PIN.md).
@@ -83,7 +90,7 @@ gate. Fork PRs do not run the arm64 cells. See
 
 `make precommit` is fmt-check and clippy. `make prepush` and
 `make pr-final` add locked tests and version-check.
-`make release-check` packages the workspace and does not publish.
+`make release-check` packages the library crates and does not publish.
 See [`RELEASE_CHECKLIST.md`](RELEASE_CHECKLIST.md) for the later signed
 GitHub release flow.
 

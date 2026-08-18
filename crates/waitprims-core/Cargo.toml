@@ -7,8 +7,10 @@ repository.workspace = true
 homepage.workspace = true
 authors.workspace = true
 rust-version.workspace = true
-publish.workspace = true
+publish = true
 description = "Core types, errors, and contract helpers for waitprims"
+documentation = "https://docs.rs/waitprims-core"
+readme = "README.md"
 
 [dependencies]
 serde.workspace = true

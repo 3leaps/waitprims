@@ -221,7 +221,30 @@ make release
 gh release edit v$(cat VERSION) --draft=false
 ```
 
-## 3. Post-release verification
+## 3. crates.io (library crates only)
+
+Do this **after** the GitHub release is signed and undrafted, and only
+when the principal or Echo lead cues publish. Token and owners stay
+out of the tree.
+
+```bash
+cargo publish -p waitprims-core
+cargo publish -p waitprims-async
+cargo publish -p waitprims-testkit
+```
+
+Do **not** publish `waitprims-cli`. `make release-check` packages
+`waitprims-core` only; it never runs `cargo publish`. Package
+`waitprims-async` and `waitprims-testkit` after core is on the
+registry.
+
+After upload, consumers can replace a git tag pin with:
+
+```toml
+waitprims-async = "0.1"
+```
+
+## 4. Post-release verification
 
 - [ ] Verify the release is public: `gh release view v$(cat VERSION)`
 - [ ] Verify checksums match: download and verify locally
@@ -240,7 +263,7 @@ shasum -a 256 -c SHA256SUMS --ignore-missing
 minisign -Vm SHA256SUMS -p waitprims-minisign.pub
 ```
 
-## 4. Post-release version bump
+## 5. Post-release version bump
 
 After the release is uploaded and verified, bump VERSION for the next
 development cycle:

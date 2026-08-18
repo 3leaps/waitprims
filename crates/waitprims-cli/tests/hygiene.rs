@@ -24,6 +24,9 @@ fn tracked_public_files() -> Vec<PathBuf> {
             "schemas/v0/PIN.md",
             "schemas/v0/rejects/README.md",
             ".github/CI.md",
+            "crates/waitprims-core/README.md",
+            "crates/waitprims-async/README.md",
+            "crates/waitprims-testkit/README.md",
         ])
         .current_dir(&root)
         .output()
