@@ -17,6 +17,9 @@ release does not publish to crates.io or change visibility.
   patch bump does not require a hardcoded pin
 - Makefile adds `precommit` and `pr-final` beside the existing
   `prepush` gate
+- `docs/releases/vX.Y.Z.md` is the this-cut section of
+  `RELEASE_NOTES.md` (signed payload). Checksums cover this tag
+  only (no leftover earlier-cut notes or archives)
 
 ## [0.1.1]
 
