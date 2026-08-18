@@ -1,0 +1,238 @@
+# waitprims signed-release draft
+#
+# On a v* tag, build unsigned CLI archives for the platforms this repo
+# already smokes, attach SBOM + licenses, and open a draft GitHub release.
+# CI does not hold signing keys. A maintainer signs and uploads locally.
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  validate-version:
+    name: Validate Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Validate VERSION matches tag
+        id: version
+        run: |
+          set -euo pipefail
+          FILE_VERSION=$(tr -d ' \t\r\n' < VERSION)
+          TAG_VERSION=${GITHUB_REF_NAME#v}
+          if [ "$FILE_VERSION" != "$TAG_VERSION" ]; then
+            echo "VERSION mismatch: file=$FILE_VERSION tag=$TAG_VERSION"
+            exit 1
+          fi
+          echo "version=$FILE_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Check version consistency
+        run: ./scripts/check-version.sh
+
+  package-check:
+    name: Package Check
+    needs: validate-version
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust 1.88.0
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.88.0
+
+      - name: Verify crates package (does not publish)
+        run: cargo package -p waitprims-core
+
+  build-cli:
+    name: Build CLI (${{ matrix.artifact_suffix }})
+    needs: validate-version
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_suffix: linux-amd64
+            archive: tar.gz
+          - runner: ubuntu-latest-arm64-s
+            target: aarch64-unknown-linux-gnu
+            artifact_suffix: linux-arm64
+            archive: tar.gz
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            artifact_suffix: darwin-arm64
+            archive: tar.gz
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_suffix: windows-amd64
+            archive: zip
+          - runner: windows-latest-arm64-s
+            target: aarch64-pc-windows-msvc
+            artifact_suffix: windows-arm64
+            archive: zip
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust 1.88.0
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.88.0
+
+      - name: Verify native host
+        run: |
+          set -euo pipefail
+          host=$(rustc -vV | awk '/^host:/{print $2}')
+          test "$host" = "${{ matrix.target }}"
+
+      - name: Build CLI
+        run: cargo build --release --target ${{ matrix.target }} -p waitprims-cli
+
+      - name: Package CLI
+        run: |
+          set -euo pipefail
+          version="${{ needs.validate-version.outputs.version }}"
+          suffix="${{ matrix.artifact_suffix }}"
+          mkdir -p dist/cli
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            cp "target/${{ matrix.target }}/release/waitprims.exe" dist/cli/waitprims.exe
+            cp LICENSE-MIT LICENSE-APACHE dist/cli/
+            powershell.exe -NoProfile -Command "Compress-Archive -Path dist/cli/* -DestinationPath waitprims-${version}-${suffix}.zip"
+          else
+            cp "target/${{ matrix.target }}/release/waitprims" dist/cli/waitprims
+            cp LICENSE-MIT LICENSE-APACHE dist/cli/
+            tar -czf "waitprims-${version}-${suffix}.tar.gz" -C dist/cli .
+          fi
+
+      - name: Upload CLI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.artifact_suffix }}
+          path: waitprims-${{ needs.validate-version.outputs.version }}-${{ matrix.artifact_suffix }}.${{ matrix.archive }}
+
+  sbom:
+    name: Generate SBOM
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/fulmenhq/sbom-tools:latest
+      options: --user 1001
+    needs: validate-version
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Generate SBOM (CycloneDX)
+        run: syft dir:. -o cyclonedx-json > sbom-${{ needs.validate-version.outputs.version }}.cdx.json
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom-${{ needs.validate-version.outputs.version }}.cdx.json
+
+  publish:
+    name: Publish Draft Release
+    runs-on: ubuntu-latest
+    needs:
+      - validate-version
+      - package-check
+      - build-cli
+      - sbom
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download CLI artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cli-*
+          path: release-cli
+
+      - name: Download SBOM
+        uses: actions/download-artifact@v4
+        with:
+          name: sbom
+          path: release-sbom
+
+      - name: Organize release files
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          find release-cli -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec mv {} release/ \;
+          mv release-sbom/*.json release/
+          cp LICENSE-MIT LICENSE-APACHE release/
+          ls -la release/
+
+      - name: Create Draft Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          draft: true
+          body: |
+            ## waitprims v${{ needs.validate-version.outputs.version }}
+
+            Library-first wait primitive. The CLI is diagnostic. There is no daemon and no language bindings.
+
+            This draft is **unsigned**. CI does not hold signing keys. A maintainer signs checksums locally (MFA / hardware token) and uploads them with `make release`.
+
+            Once signed artifacts are available:
+            ```bash
+            minisign -Vm SHA256SUMS -p waitprims-minisign.pub
+            shasum -a 256 -c SHA256SUMS
+            ```
+
+            ### Platform matrix
+
+            Hosted smokes plus same-repo arm64 labs. No musl, no macOS Intel.
+
+            | Platform | CLI |
+            |----------|-----|
+            | Linux x64 | `waitprims-*-linux-amd64.tar.gz` |
+            | Linux arm64 | `waitprims-*-linux-arm64.tar.gz` |
+            | macOS arm64 | `waitprims-*-darwin-arm64.tar.gz` |
+            | Windows x64 | `waitprims-*-windows-amd64.zip` |
+            | Windows arm64 | `waitprims-*-windows-arm64.zip` |
+
+            Crates stay `publish = false`. This workflow does not run `cargo publish`.

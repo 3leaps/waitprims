@@ -81,6 +81,11 @@ cells (linux-x64, macos-arm64, windows-x64) on every push/PR. arm64 labs
 gate. Fork PRs do not run the arm64 cells. See
 [`.github/CI.md`](.github/CI.md) and [`docs/README.md`](docs/README.md).
 
+`make prepush` runs fmt, clippy, locked tests, and version-check.
+`make release-check` packages the workspace and does not publish.
+See [`RELEASE_CHECKLIST.md`](RELEASE_CHECKLIST.md) for the later signed
+GitHub release flow.
+
 The diagnostic binary lands at `target/debug/waitprims`.
 
 ```bash
@@ -102,3 +107,6 @@ Licensed under either of:
 - MIT license ([LICENSE-MIT](LICENSE-MIT))
 
 at your option.
+
+Subject to [3 Leaps OSS policies](https://github.com/3leaps/oss-policies),
+including [Sensitive Local Data](https://github.com/3leaps/oss-policies/blob/main/SENSITIVE-LOCAL-DATA.md).

@@ -19,9 +19,10 @@ pub const CAPABILITY: &str = "contract: agent-wait/v0";
 /// Crucible commit this tree vendors.
 pub const PINNED_CRUCIBLE_SHA: &str = "f1912957cde19b2b1e7809e430cc28dc417287cc";
 
-const BUNDLED_CONTRACT: &str = include_str!("../../../schemas/v0/contract.json");
-const BUNDLED_ENTRY_SCHEMA: &str =
-    include_str!("../../../schemas/v0/agent-wait-message.schema.json");
+// Crate-local copies so `cargo package` can verify without the workspace
+// tree. Tests assert these match `schemas/v0`.
+const BUNDLED_CONTRACT: &str = include_str!("../bundled/contract.json");
+const BUNDLED_ENTRY_SCHEMA: &str = include_str!("../bundled/agent-wait-message.schema.json");
 
 /// Capability manifest on disk or bundled with the crate.
 #[derive(Debug, Clone, Deserialize)]
@@ -259,6 +260,15 @@ mod tests {
                 constraint: "mismatch"
             })
         ));
+    }
+
+    #[test]
+    fn bundled_pin_bytes_match_vendored_schemas() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../schemas/v0");
+        let contract = fs::read_to_string(root.join("contract.json")).unwrap();
+        let entry = fs::read_to_string(root.join("agent-wait-message.schema.json")).unwrap();
+        assert_eq!(BUNDLED_CONTRACT, contract);
+        assert_eq!(BUNDLED_ENTRY_SCHEMA, entry);
     }
 
     #[test]

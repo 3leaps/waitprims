@@ -40,7 +40,12 @@ daemon, FFI, or language bindings.
 - Run `cargo fmt && cargo clippy`
 - Run `cargo test`
 - Verify no unintended changes with `git diff`
-- Do not put planning IDs, local path names, or secrets in tracked files
+- Do not put planning IDs, local path names, or secrets in tracked files.
+  Planning and machine-local notes stay outside this tree;
+  `.gitignore` is a convenience filter, not a security boundary.
+  This follows the
+  [3 Leaps OSS Sensitive Local Data](https://github.com/3leaps/oss-policies/blob/main/SENSITIVE-LOCAL-DATA.md)
+  policy.
 
 ## Do / Do not
 
@@ -85,7 +90,11 @@ MIT OR Apache-2.0. All dependencies must stay permissively licensed.
 | `crates/waitprims-cli` | Diagnostic binary `waitprims` |
 | `schemas/v0` | Vendored contract schemas |
 | `docs` | Short beginning: kinds, pin, FakeClock, cancel |
+| `docs/releases` | Per-version release notes |
 | `fixtures` | Local extras |
+| `VERSION` | Version SSOT |
+| `RELEASE_CHECKLIST.md` | Write/prep vs maintainer MFA sign/upload |
+| `Makefile` | version-sync, prepush, release-* |
 
 ## Contact
 

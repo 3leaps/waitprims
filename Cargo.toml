@@ -8,17 +8,19 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 rust-version = "1.88.0"
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/3leaps/waitprims"
+homepage = "https://github.com/3leaps/waitprims"
 authors = ["3leaps Architecture Council"]
 publish = false
 
 [workspace.dependencies]
-waitprims-core = { path = "crates/waitprims-core" }
-waitprims-async = { path = "crates/waitprims-async" }
-waitprims-testkit = { path = "crates/waitprims-testkit" }
+waitprims-core = { version = "0.1.1", path = "crates/waitprims-core" }
+waitprims-async = { version = "0.1.1", path = "crates/waitprims-async" }
+waitprims-testkit = { version = "0.1.1", path = "crates/waitprims-testkit" }
 
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

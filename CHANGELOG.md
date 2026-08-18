@@ -1,6 +1,27 @@
 # Changelog
 
-## 0.1.0
+All notable changes to this project are documented in this file.
+
+## [Unreleased]
+
+## [0.1.1]
+
+Signed-release kit. No library API change is intended. Workspace version
+is 0.1.1 so a later maintainer tag can cut a signed GitHub release. This
+commit does not create a tag, publish to crates.io, or change visibility.
+
+- VERSION is the version SSOT (`make version-sync`, `make version-check`)
+- Makefile release targets and `scripts/` for download, checksums, MFA
+  sign, verify, and upload (`WAITPRIMS_*` env vars)
+- Draft GitHub release workflow on `v*` tags: CLI archives for the five
+  smoked platforms, SBOM, `LICENSE-MIT`, `LICENSE-APACHE`
+- CI does not hold signing keys; `make release-check` packages the
+  workspace and does not run `cargo publish`
+- `publish` stays `false`; repository/homepage added for a later crates.io
+  enablement
+- Rust only: no Go/TS/FFI bindings half
+
+## [0.1.0]
 
 First tagged library. Pin from git (`tag = "v0.1.0"`). Not on crates.io.
 APIs may still move.
@@ -12,3 +33,7 @@ APIs may still move.
 - Diagnostic CLI (`waitprims`)
 - CI matrix already on main (`fast` plus hosted smokes; arm64 labs
   same-repo only)
+
+[Unreleased]: https://github.com/3leaps/waitprims/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/3leaps/waitprims/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/3leaps/waitprims/releases/tag/v0.1.0

@@ -57,3 +57,8 @@ schema. Point callers at [`schemas/v0/`](../schemas/v0/). The schema
 | `waitprims-async` | First-match and poll-cycle runners |
 | `waitprims-testkit` | Fake clock and scripted observers |
 | `waitprims-cli` | Diagnostic binary (`waitprims`) |
+
+## Releases
+
+Per-version notes live in [`releases/`](releases/). The signed-release
+flow is [`RELEASE_CHECKLIST.md`](../RELEASE_CHECKLIST.md).
