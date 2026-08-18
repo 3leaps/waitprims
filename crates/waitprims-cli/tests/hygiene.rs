@@ -19,6 +19,7 @@ fn tracked_public_files() -> Vec<PathBuf> {
             "README.md",
             "AGENTS.md",
             "docs",
+            "docs/decisions",
             "fixtures",
             "schemas/v0/README.md",
             "schemas/v0/PIN.md",
