@@ -234,8 +234,8 @@ cargo publish -p waitprims-testkit
 ```
 
 Do **not** publish `waitprims-cli`. `make release-check` runs
-`cargo package --workspace` (same gate as ipcprims) and never
-runs `cargo publish`.
+`cargo package --workspace` (packages all workspace crates,
+including the unpublished CLI) and never runs `cargo publish`.
 
 After upload, consumers can replace a git tag pin with:
 

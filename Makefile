@@ -225,8 +225,9 @@ release-check: version-check ## Version consistency + package check (does not pu
 	@echo ""
 	@echo "Packaging workspace crates (does not cargo publish)..."
 	@# Same gate as ipcprims: cargo package --workspace verifies
-	@# dependents from a local tmp registry, so a first crates.io
-	@# upload is not required. waitprims-cli stays publish = false.
+	@# dependents from a local tmp registry. Workspace publish stays
+	@# false; libraries opt in. The CLI is packaged here but not
+	@# publishable.
 	@$(CARGO) package --workspace
 	@echo "[ok] Package check passed"
 	@echo ""

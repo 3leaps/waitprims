@@ -235,5 +235,6 @@ jobs:
             | Windows x64 | `waitprims-*-windows-amd64.zip` |
             | Windows arm64 | `waitprims-*-windows-arm64.zip` |
 
-            Library crates are publishable. The diagnostic CLI is not.
-            This workflow does not run `cargo publish`.
+            Workspace `publish` is false; three library crates opt in.
+            The diagnostic CLI is unpublished. This workflow does not
+            run `cargo publish`.

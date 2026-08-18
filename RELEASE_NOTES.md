@@ -13,11 +13,13 @@ is intended.
 
 ### Highlights
 
-- `waitprims-core`, `waitprims-async`, and `waitprims-testkit` are
-  publishable. Each crate has a README and a docs.rs URL.
-- `waitprims-cli` sets `publish = false` (diagnostic).
-- `make release-check` runs `cargo package --workspace` (same gate
-  as ipcprims).
+- Workspace `publish` stays `false`. `waitprims-core`,
+  `waitprims-async`, and `waitprims-testkit` opt in with
+  `publish = true`. Each has a README and a docs.rs URL.
+- `waitprims-cli` inherits unpublished (diagnostic).
+- `make release-check` runs `cargo package --workspace`: packages
+  all workspace crates, including the unpublished CLI; publishes
+  none.
 - Consumers can pin `waitprims-async = "0.1"` after the crates.io
   upload. A git tag pin still works.
 

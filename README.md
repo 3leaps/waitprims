@@ -90,7 +90,8 @@ gate. Fork PRs do not run the arm64 cells. See
 
 `make precommit` is fmt-check and clippy. `make prepush` and
 `make pr-final` add locked tests and version-check.
-`make release-check` packages the library crates and does not publish.
+`make release-check` packages the workspace (`cargo package --workspace`)
+and publishes none. Only the three library crates are publishable.
 See [`RELEASE_CHECKLIST.md`](RELEASE_CHECKLIST.md) for the later signed
 GitHub release flow.
 

@@ -7,7 +7,7 @@ repository.workspace = true
 homepage.workspace = true
 authors.workspace = true
 rust-version.workspace = true
-publish = false
+publish.workspace = true
 description = "Diagnostic CLI for waitprims"
 
 [[bin]]
