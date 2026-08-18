@@ -2,7 +2,29 @@
 
 All notable changes to this project are documented in this file.
 
+Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+> **Purge policy:** this file retains the **latest 10 releases**.
+> Older entries are archived in `docs/releases/v<semver>.md` and
+> removed from this file. The landing page (`RELEASE_NOTES.md`)
+> keeps only the latest three cuts.
+
 ## [Unreleased]
+
+## [0.1.3] - 2026-08-18
+
+First crates.io cut for the library crates. No library API change
+is intended.
+
+- Workspace `publish` stays `false`. `waitprims-core`,
+  `waitprims-async`, and `waitprims-testkit` opt in with
+  `publish = true`; `waitprims-cli` inherits unpublished
+- Library crates have docs.rs URLs and crate READMEs
+- `make release-check` runs `cargo package --workspace` (packages
+  all four workspace crates, including the unpublished CLI;
+  publishes none)
+- README documents a crates.io pin without a patch version
 
 ## [0.1.2]
 
@@ -51,7 +73,8 @@ APIs may still move.
 - CI matrix already on main (`fast` plus hosted smokes; arm64 labs
   same-repo only)
 
-[Unreleased]: https://github.com/3leaps/waitprims/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/3leaps/waitprims/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/3leaps/waitprims/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/3leaps/waitprims/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/3leaps/waitprims/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/3leaps/waitprims/releases/tag/v0.1.0

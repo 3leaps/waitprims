@@ -223,11 +223,12 @@ version-check: ## Validate version consistency across files
 release-check: version-check ## Version consistency + package check (does not publish)
 	@echo "Checking release readiness..."
 	@echo ""
-	@echo "Packaging workspace crates (publish remains false; does not cargo publish)..."
-	@# cargo package --workspace cannot resolve unpublished path members
-	@# from crates.io while publish stays false. Verify the leaf crate
-	@# tarball. Dependents stay path+version ready for later enablement.
-	@$(CARGO) package -p waitprims-core
+	@echo "Packaging workspace crates (does not cargo publish)..."
+	@# Same gate as ipcprims: cargo package --workspace verifies
+	@# dependents from a local tmp registry. Workspace publish stays
+	@# false; libraries opt in. The CLI is packaged here but not
+	@# publishable.
+	@$(CARGO) package --workspace
 	@echo "[ok] Package check passed"
 	@echo ""
 	@echo "Release checklist:"

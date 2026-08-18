@@ -56,10 +56,32 @@ schema. Point callers at [`schemas/v0/`](../schemas/v0/). The schema
 | `waitprims-core` | Types, errors, validation, digest and RFC3339 helpers |
 | `waitprims-async` | First-match and poll-cycle runners |
 | `waitprims-testkit` | Fake clock and scripted observers |
-| `waitprims-cli` | Diagnostic binary (`waitprims`) |
+| `waitprims-cli` | Diagnostic binary (`waitprims`); not on crates.io |
+
+## Install
+
+This cut enables crates.io for the three library crates. After that
+publication, pin the minor line; do not copy a patch from this file.
+
+```toml
+waitprims-core = "0.1"
+waitprims-async = "0.1"
+waitprims-testkit = "0.1"
+```
+
+Until the crates are on the registry, pin a git tag. The CLI is
+diagnostic only: build it from this tree (`cargo build -p waitprims-cli`).
+It is not a crates.io package.
+
+docs.rs pages appear after the first crates.io upload:
+[waitprims-core](https://docs.rs/waitprims-core),
+[waitprims-async](https://docs.rs/waitprims-async),
+[waitprims-testkit](https://docs.rs/waitprims-testkit).
 
 ## Releases
 
-Latest three cuts: [`RELEASE_NOTES.md`](../RELEASE_NOTES.md).
-Per-version notes live in [`releases/`](releases/). The signed-release
-flow is [`RELEASE_CHECKLIST.md`](../RELEASE_CHECKLIST.md).
+Latest three cuts: [`RELEASE_NOTES.md`](../RELEASE_NOTES.md)
+(purge: three). Older cuts stay in [`releases/`](releases/)
+(including [`v0.1.0`](releases/v0.1.0.md)). `CHANGELOG.md` keeps
+the latest ten (not yet over that). The signed-release flow is
+[`RELEASE_CHECKLIST.md`](../RELEASE_CHECKLIST.md).

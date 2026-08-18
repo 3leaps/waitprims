@@ -1,8 +1,37 @@
 # Release Notes
 
-> This file keeps the latest 3 releases in reverse chronological order.
-> For the complete history, see `CHANGELOG.md`.
-> For per-version notes, see `docs/releases/`.
+> **Purge policy:** this file keeps the **latest 3 releases** in
+> reverse chronological order. Older cuts live in `docs/releases/`
+> and, until the changelog purge, in `CHANGELOG.md`.
+> The signed / GitHub payload is the this-cut extract under
+> `docs/releases/`, not this landing page.
+
+---
+
+## v0.1.3 — 2026-08-18
+
+First crates.io cut for the library crates. No library API change
+is intended.
+
+### Highlights
+
+- `waitprims-core`, `waitprims-async`, and `waitprims-testkit` are
+  publishable. Workspace `publish` stays `false`; those three crates
+  opt in. Each has a README and a docs.rs URL.
+- `waitprims-cli` stays unpublished (diagnostic).
+- `make release-check` runs `cargo package --workspace`. That
+  packages all four workspace crates, including the unpublished
+  CLI, and does not publish.
+
+### Upgrade notes
+
+- No public API change.
+- Depend on the library crates from crates.io
+  (`waitprims-async = "0.1"`). A git tag pin still works.
+- Signing is local MFA (`make release-sign` / `make release`). CI
+  still drafts an unsigned GitHub release.
+
+Full notes: [docs/releases/v0.1.3.md](docs/releases/v0.1.3.md)
 
 ---
 
@@ -47,18 +76,3 @@ Signed-release kit. No library API change is intended.
   `cargo publish`. `publish` stays `false`.
 
 Full notes: [docs/releases/v0.1.1.md](docs/releases/v0.1.1.md)
-
----
-
-## v0.1.0 — 2026-08-17
-
-First tagged library. Pin from git (`tag = "v0.1.0"`). Not on crates.io.
-APIs may still move.
-
-### Highlights
-
-- Library-first wait primitive: first-match when the caller can block,
-  one bounded poll-cycle when they cannot.
-- Public JSON is the six `agent-wait/v0` message kinds.
-- `waitprims-testkit` FakeClock and scripted observers.
-- Diagnostic CLI (`waitprims`).

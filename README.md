@@ -2,6 +2,8 @@
 
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
 [![Rust: 1.88+](https://img.shields.io/badge/rust-1.88%2B-orange.svg)](https://www.rust-lang.org/)
+[![crates.io](https://img.shields.io/crates/v/waitprims-core.svg)](https://crates.io/crates/waitprims-core)
+[![docs.rs](https://docs.rs/waitprims-core/badge.svg)](https://docs.rs/waitprims-core)
 
 **Reliable event wait without a daemon.**
 
@@ -9,7 +11,7 @@ waitprims is a library-first wait primitive for agent seats and services. It pro
 
 The problem it retires: every adapter reinventing anchors, deadlines, cancellation, and “we posted, so the agent woke.”
 
-**Lifecycle Phase**: `pre-alpha` | v0.1.x is Rust only. The library is the product; the CLI is a thin test/diagnostic wrapper.
+**Lifecycle Phase**: `pre-alpha` | Rust only. The library is the product; the CLI is a thin test/diagnostic wrapper. See [RELEASE_NOTES.md](RELEASE_NOTES.md) for the current cut.
 
 ## What this is
 
@@ -54,13 +56,21 @@ silently advance cursors.
 | `waitprims-core` | Types, errors, validation, digest and time helpers |
 | `waitprims-async` | First-match and poll-cycle runners |
 | `waitprims-testkit` | Fake clock and scripted observers |
-| `waitprims-cli` | Diagnostic CLI (`waitprims`) |
+| `waitprims-cli` | Diagnostic CLI (`waitprims`); not on crates.io |
 
 ## Status
 
-This is the first tagged library (`0.1.0`). Pin from git
-(`git = "…", tag = "v0.1.0"`). There is no crates.io crate. APIs may
-still move.
+This cut enables crates.io for the library crates. After that
+publication, depend with:
+
+```toml
+waitprims-core = "0.1"
+waitprims-async = "0.1"
+waitprims-testkit = "0.1"
+```
+
+Until then, pin a git tag. The diagnostic CLI is not published. APIs
+may still move. See [docs/README.md](docs/README.md#install).
 
 Pinned `contract: agent-wait/v0` at Crucible `f1912957cde19b2b1e7809e430cc28dc417287cc`. See [`schemas/v0/PIN.md`](schemas/v0/PIN.md).
 
@@ -83,7 +93,8 @@ gate. Fork PRs do not run the arm64 cells. See
 
 `make precommit` is fmt-check and clippy. `make prepush` and
 `make pr-final` add locked tests and version-check.
-`make release-check` packages the workspace and does not publish.
+`make release-check` packages the workspace (`cargo package --workspace`)
+and publishes none. Only the three library crates are publishable.
 See [`RELEASE_CHECKLIST.md`](RELEASE_CHECKLIST.md) for the later signed
 GitHub release flow.
 
