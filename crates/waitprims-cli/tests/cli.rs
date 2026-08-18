@@ -47,17 +47,17 @@ fn validate_input(target: &Path) -> std::process::Output {
 }
 
 #[test]
-fn version_prints_0_1_0() {
+fn version_prints_0_1_1() {
     let output = bin().arg("--version").output().expect("run --version");
     assert_eq!(output.status.code(), Some(0));
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("0.1.0"),
+        stdout.contains("0.1.1"),
         "unexpected --version output: {stdout}"
     );
     assert!(
-        !stdout.contains("0.1.0-dev"),
-        "version must be 0.1.0, not 0.1.0-dev: {stdout}"
+        !stdout.contains("0.1.1-dev"),
+        "version must be 0.1.1, not 0.1.1-dev: {stdout}"
     );
 }
 
