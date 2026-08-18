@@ -14,9 +14,17 @@ fi
 
 cd "$DIR"
 
+if ! compgen -G 'release-notes-*.md' >/dev/null; then
+	echo "Error: release notes not in $DIR"
+	echo "Copy notes before checksums so they are in the signed set:"
+	echo "  make release-notes"
+	exit 1
+fi
+
 echo "Generating checksums in $DIR..."
 
-# Archives, SBOM/metadata, licenses, copied release notes.
+# Archives, SBOM/metadata, licenses, and release notes copied before
+# this step so they are in the signed checksum set.
 # No FFI headers or committed static libraries.
 CHECKSUM_PATTERNS=(
 	'*.tar.gz'

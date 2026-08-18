@@ -3,6 +3,9 @@
 # Usage: upload-release-assets.sh <tag> [dir]
 #
 # Uploads checksum files, signatures, public keys, and release notes.
+# Release notes must already be in the signed checksum manifests
+# (copied before `make release-checksums`). This script does not add
+# unsigned notes after signing.
 # Leaves the GitHub release as a draft. Publishing is a separate human step.
 # Requires: gh CLI authenticated with write permissions
 set -euo pipefail

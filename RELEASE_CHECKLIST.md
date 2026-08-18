@@ -132,15 +132,26 @@ export WAITPRIMS_GPG_HOMEDIR=/path/to/gpg/homedir  # optional
    make release-download
    ```
 
-3. **Generate checksum manifests**
+3. **Copy release notes into dist** (before checksums)
+
+   ```bash
+   make release-notes
+   ```
+
+   Copies `docs/releases/vX.Y.Z.md` to `dist/release/release-notes-vX.Y.Z.md`
+   so the notes are in the signed checksum set. Missing notes is a hard
+   failure. Do not copy notes after signing.
+
+4. **Generate checksum manifests**
 
    ```bash
    make release-checksums
    ```
 
-   Produces: `SHA256SUMS`, `SHA512SUMS`
+   Produces: `SHA256SUMS`, `SHA512SUMS` covering archives, SBOM, licenses,
+   and the copied release notes.
 
-4. **Sign checksum manifests** (minisign + PGP)
+5. **Sign checksum manifests** (minisign + PGP)
 
    ```bash
    make release-sign
@@ -148,7 +159,7 @@ export WAITPRIMS_GPG_HOMEDIR=/path/to/gpg/homedir  # optional
 
    Produces: `.minisig` and `.asc` signatures for both checksum files
 
-5. **Export public keys**
+6. **Export public keys**
 
    ```bash
    make release-export-keys
@@ -156,24 +167,16 @@ export WAITPRIMS_GPG_HOMEDIR=/path/to/gpg/homedir  # optional
 
    Produces: `waitprims-minisign.pub`, `waitprims-release-signing-key.asc`
 
-6. **Verify everything before upload**
+7. **Verify everything before upload**
 
    ```bash
    make release-verify
    ```
 
    Validates:
-   - Checksums match artifacts
+   - Checksums match artifacts (including release notes)
    - Signatures verify correctly
    - Exported keys are public-only (no secret key material)
-
-7. **Copy release notes**
-
-   ```bash
-   make release-notes
-   ```
-
-   Copies `docs/releases/vX.Y.Z.md` to `dist/release/release-notes-vX.Y.Z.md`
 
 8. **Upload signed artifacts to GitHub**
 
@@ -182,7 +185,8 @@ export WAITPRIMS_GPG_HOMEDIR=/path/to/gpg/homedir  # optional
    ```
 
    Uses `--clobber` to overwrite existing assets. Safe to rerun.
-   Leaves the release as a draft.
+   Leaves the release as a draft. Uploaded notes are the same file
+   already covered by the signed checksums.
 
 9. **Publish the release** (promotes draft → public):
 
@@ -253,7 +257,7 @@ suffix in the commit message is a convention marking a development snapshot
 | `make release-sign`              | Sign checksums with minisign + PGP (requires MFA/hardware token)               |
 | `make release-export-keys`       | Export public signing keys                                                     |
 | `make release-verify`            | Verify checksums, signatures, and keys                                         |
-| `make release-notes`             | Copy release notes to dist                                                     |
+| `make release-notes`             | Copy release notes into dist **before** checksums (signed set)                 |
 | `make release-upload`            | Upload signed artifacts to GitHub                                              |
 | `make release`                   | Full workflow (clean -> upload)                                                |
 

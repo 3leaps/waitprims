@@ -16,6 +16,9 @@
 .PHONY: release-verify release-verify-checksums release-verify-signatures release-verify-keys
 .PHONY: release-notes release-upload release
 
+# Release stages must not overlap under `make -j`.
+.NOTPARALLEL:
+
 # -----------------------------------------------------------------------------
 # Configuration
 # -----------------------------------------------------------------------------
@@ -26,7 +29,9 @@ VERSION := $(shell tr -d ' \t\r\n' < $(VERSION_FILE) 2>/dev/null || echo dev)
 CARGO = cargo
 
 DIST_RELEASE := dist/release
-WAITPRIMS_RELEASE_TAG ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo v$(VERSION))
+# In-tree VERSION is the default tag, not the nearest older git tag.
+WAITPRIMS_RELEASE_TAG ?= v$(VERSION)
+export WAITPRIMS_RELEASE_TAG
 
 WAITPRIMS_MINISIGN_KEY ?=
 WAITPRIMS_MINISIGN_PUB ?=
@@ -63,7 +68,7 @@ help: ## Show available targets
 	@echo "  release-sign       Sign checksum manifests (minisign + PGP)"
 	@echo "  release-export-keys Export public signing keys"
 	@echo "  release-verify     Verify checksums, signatures, and keys"
-	@echo "  release-notes      Copy release notes to dist"
+	@echo "  release-notes      Copy release notes into dist (before checksums)"
 	@echo "  release-upload     Upload signed artifacts to GitHub"
 	@echo "  release            Full signing workflow (clean -> upload)"
 	@echo ""
@@ -242,9 +247,12 @@ release-preflight: ## Verify all pre-tag requirements (REQUIRED before tagging)
 		exit 1; \
 	fi
 	@echo "[ok] Release notes exist"
-	@echo "[..] Verifying local/remote sync..."; \
-	git fetch origin >/dev/null 2>&1; \
-	local_only=$$(git log --oneline origin/main..HEAD 2>/dev/null | wc -l | tr -d ' '); \
+	@echo "[..] Verifying local/remote sync..."
+	@if ! git fetch origin; then \
+		echo "[!!] git fetch origin failed; cannot verify local/remote sync"; \
+		exit 1; \
+	fi
+	@local_only=$$(git log --oneline origin/main..HEAD 2>/dev/null | wc -l | tr -d ' '); \
 	remote_only=$$(git log --oneline HEAD..origin/main 2>/dev/null | wc -l | tr -d ' '); \
 	if [ "$$local_only" -gt 0 ] || [ "$$remote_only" -gt 0 ]; then \
 		echo "[!!] Local and remote are out of sync"; \
@@ -270,17 +278,26 @@ release-clean: ## Remove dist/release contents
 	rm -rf $(DIST_RELEASE)
 	@echo "[ok] Release directory cleaned"
 
-release-download: ## Download release assets from GitHub
+release-download: release-clean ## Download release assets from GitHub
 	@if [ -z "$(WAITPRIMS_RELEASE_TAG)" ] || [ "$(WAITPRIMS_RELEASE_TAG)" = "v" ]; then \
 		echo "Error: No release tag found. Set WAITPRIMS_RELEASE_TAG=vX.Y.Z"; \
 		exit 1; \
 	fi
 	./scripts/download-release-assets.sh $(WAITPRIMS_RELEASE_TAG) $(DIST_RELEASE)
 
-release-checksums: ## Generate SHA256SUMS and SHA512SUMS
+release-notes: release-download ## Copy release notes into dist before checksums
+	@src="docs/releases/$(WAITPRIMS_RELEASE_TAG).md"; \
+	if [ ! -f "$$src" ]; then \
+		echo "[!!] Release notes not found at $$src"; \
+		exit 1; \
+	fi; \
+	cp "$$src" "$(DIST_RELEASE)/release-notes-$(WAITPRIMS_RELEASE_TAG).md"; \
+	echo "[ok] Copied release notes into the checksum set"
+
+release-checksums: release-notes ## Generate SHA256SUMS and SHA512SUMS
 	./scripts/generate-checksums.sh $(DIST_RELEASE)
 
-release-sign: ## Sign checksum manifests (requires WAITPRIMS_MINISIGN_KEY)
+release-sign: release-checksums ## Sign checksum manifests (requires WAITPRIMS_MINISIGN_KEY)
 	@if [ -z "$(WAITPRIMS_MINISIGN_KEY)" ]; then \
 		echo "Error: WAITPRIMS_MINISIGN_KEY not set"; \
 		echo ""; \
@@ -293,7 +310,7 @@ release-sign: ## Sign checksum manifests (requires WAITPRIMS_MINISIGN_KEY)
 	WAITPRIMS_GPG_HOMEDIR=$(WAITPRIMS_GPG_HOMEDIR) \
 	./scripts/sign-release-assets.sh $(WAITPRIMS_RELEASE_TAG) $(DIST_RELEASE)
 
-release-export-keys: ## Export public signing keys
+release-export-keys: release-sign ## Export public signing keys
 	WAITPRIMS_MINISIGN_KEY=$(WAITPRIMS_MINISIGN_KEY) \
 	WAITPRIMS_MINISIGN_PUB=$(WAITPRIMS_MINISIGN_PUB) \
 	WAITPRIMS_PGP_KEY_ID=$(WAITPRIMS_PGP_KEY_ID) \
@@ -314,17 +331,13 @@ release-verify-keys: ## Verify exported keys are public-only
 release-verify: release-verify-checksums release-verify-signatures release-verify-keys ## Run all release verification
 	@echo "[ok] All release verifications passed"
 
-release-notes: ## Copy release notes to dist
-	@src="docs/releases/$(WAITPRIMS_RELEASE_TAG).md"; \
-	if [ -f "$$src" ]; then \
-		cp "$$src" "$(DIST_RELEASE)/release-notes-$(WAITPRIMS_RELEASE_TAG).md"; \
-		echo "[ok] Copied release notes"; \
-	else \
-		echo "[--] No release notes found at $$src"; \
-	fi
-
-release-upload: release-verify release-notes ## Upload signed artifacts to GitHub release
+release-upload: release-verify ## Upload signed artifacts to GitHub release
 	./scripts/upload-release-assets.sh $(WAITPRIMS_RELEASE_TAG) $(DIST_RELEASE)
 
-release: release-guard-tag-version release-clean release-download release-checksums release-sign release-export-keys release-upload ## Full signing workflow (after CI build)
+# Walk the serialized write chain once, then verify and upload.
+# `make -j release` still cannot overlap stages (.NOTPARALLEL + prereqs).
+release: release-guard-tag-version ## Full signing workflow (after CI build)
+	$(MAKE) release-export-keys
+	$(MAKE) release-verify
+	$(MAKE) release-upload
 	@echo "[ok] Release $(WAITPRIMS_RELEASE_TAG) complete"

@@ -30,7 +30,15 @@ detect_tag() {
 		printf '%s' "${RELEASE_TAG}"
 		return 0
 	fi
-	git describe --tags --exact-match 2>/dev/null || true
+	# Exact tag on HEAD if present. Never the nearest older tag.
+	local exact
+	exact="$(git describe --tags --exact-match 2>/dev/null || true)"
+	if [ -n "$exact" ]; then
+		printf '%s' "$exact"
+		return 0
+	fi
+	# Untagged HEAD: target the in-tree VERSION, not an older tag.
+	printf 'v%s' "$(read_version)"
 }
 
 main() {
