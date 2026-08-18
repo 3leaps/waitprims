@@ -60,8 +60,8 @@ silently advance cursors.
 
 ## Status
 
-Library crates publish to crates.io. The diagnostic CLI does not. APIs
-may still move.
+This cut enables crates.io for the library crates. After that
+publication, depend with:
 
 ```toml
 waitprims-core = "0.1"
@@ -69,7 +69,8 @@ waitprims-async = "0.1"
 waitprims-testkit = "0.1"
 ```
 
-A git tag pin still works. See [docs/README.md](docs/README.md#install).
+Until then, pin a git tag. The diagnostic CLI is not published. APIs
+may still move. See [docs/README.md](docs/README.md#install).
 
 Pinned `contract: agent-wait/v0` at Crucible `f1912957cde19b2b1e7809e430cc28dc417287cc`. See [`schemas/v0/PIN.md`](schemas/v0/PIN.md).
 
