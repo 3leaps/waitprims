@@ -6,10 +6,8 @@ All notable changes to this project are documented in this file.
 
 ## [0.1.2]
 
-Release-kit hygiene. No library API change is intended. Workspace
-version is 0.1.2 so a maintainer can tag a signed GitHub release.
-This commit does not create a tag, publish to crates.io, or change
-visibility.
+Release-kit hygiene. No library API change is intended. This
+release does not publish to crates.io or change visibility.
 
 - Makefile release leaf targets no longer depend on earlier write
   stages. `make release-export-keys` does not re-clean or re-download

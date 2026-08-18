@@ -27,6 +27,7 @@ committed `.a`. CI never holds signing keys.
 - [ ] Update `CHANGELOG.md`
   - **Do not skip footer links**: add `[X.Y.Z]` compare link and re-anchor
     `[Unreleased]` to compare from the new tag to `HEAD`
+- [ ] Update `RELEASE_NOTES.md` (latest three cuts, newest first)
 - [ ] Create release notes: `docs/releases/vX.Y.Z.md`
 
 ### Pre-tag quality gates
@@ -49,7 +50,7 @@ committed `.a`. CI never holds signing keys.
 - [ ] Commit the release-prep content:
 
   ```bash
-  git add VERSION Cargo.toml Cargo.lock CHANGELOG.md docs/releases
+  git add VERSION Cargo.toml Cargo.lock CHANGELOG.md RELEASE_NOTES.md docs/releases
   git commit -m "chore: bump version to vX.Y.Z"
   ```
 
