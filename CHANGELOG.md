@@ -15,6 +15,8 @@ release does not publish to crates.io or change visibility.
   checksums, sign, export-keys, upload (verify once via upload)
 - CLI `--version` test tracks the workspace `VERSION` file so a
   patch bump does not require a hardcoded pin
+- Makefile adds `precommit` and `pr-final` beside the existing
+  `prepush` gate
 
 ## [0.1.1]
 

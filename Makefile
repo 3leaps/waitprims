@@ -3,13 +3,15 @@
 #
 # Quick reference:
 #   make help              Show available targets
-#   make prepush           fmt, clippy, locked tests, version-check
+#   make precommit         fmt-check, clippy
+#   make prepush           fmt-check, clippy, locked tests, version-check
+#   make pr-final          same as prepush (PR merge-readiness)
 #   make version-sync      Sync VERSION to Cargo.toml
 #   make release-preflight Verify pre-tag requirements
 #   make release-check     Version consistency + cargo package (does not publish)
 
 .PHONY: all help check test fmt fmt-check lint build clean version
-.PHONY: prepush
+.PHONY: precommit prepush pr-final
 .PHONY: version-patch version-minor version-major version-set version-sync version-check
 .PHONY: release-check release-preflight release-guard-tag-version
 .PHONY: release-clean release-download release-checksums release-sign release-export-keys
@@ -57,7 +59,9 @@ help: ## Show available targets
 	@echo "  lint            cargo clippy --workspace --all-targets -- -D warnings"
 	@echo "  build           cargo build --workspace"
 	@echo "  clean           cargo clean"
+	@echo "  precommit       fmt-check, clippy"
 	@echo "  prepush         fmt-check, clippy, locked tests, version-check"
+	@echo "  pr-final        same as prepush (PR merge-readiness)"
 	@echo ""
 	@echo "Release:"
 	@echo "  release-preflight  Verify all pre-tag requirements (REQUIRED before tagging)"
@@ -115,8 +119,14 @@ clean: ## Remove build artifacts
 	$(CARGO) clean
 	@echo "[ok] Clean complete"
 
+precommit: fmt-check lint ## Fast checks for every commit
+	@echo "[ok] Pre-commit checks passed"
+
 prepush: fmt-check lint test version-check ## Thorough checks before push
 	@echo "[ok] Pre-push checks passed"
+
+pr-final: prepush ## Final PR merge-readiness gate
+	@echo "[ok] PR final checks passed"
 
 # -----------------------------------------------------------------------------
 # Version Management

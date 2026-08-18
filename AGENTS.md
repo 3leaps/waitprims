@@ -94,7 +94,7 @@ MIT OR Apache-2.0. All dependencies must stay permissively licensed.
 | `fixtures` | Local extras |
 | `VERSION` | Version SSOT |
 | `RELEASE_CHECKLIST.md` | Write/prep vs maintainer MFA sign/upload |
-| `Makefile` | version-sync, prepush, release-* |
+| `Makefile` | version-sync, precommit, prepush, pr-final, release-* |
 
 ## Contact
 

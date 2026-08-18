@@ -36,7 +36,7 @@ committed `.a`. CI never holds signing keys.
 
   This is the single authoritative gate. It runs, in order:
   1. Working tree clean check
-  2. `make prepush` — fmt, clippy, locked tests, **version consistency**
+  2. `make pr-final` — `prepush` (fmt, clippy, locked tests, **version consistency**)
   3. `make version-check` — `VERSION`, `Cargo.toml`, crate workspace versions
   4. Release notes exist at `docs/releases/vX.Y.Z.md`
   5. Local/remote sync (no unpushed or unpulled commits)
