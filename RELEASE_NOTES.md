@@ -1,33 +1,33 @@
 # Release Notes
 
-> This file keeps the latest 3 releases in reverse chronological order.
-> For the complete history, see `CHANGELOG.md`.
-> For per-version notes, see `docs/releases/`.
+> **Purge policy:** this file keeps the **latest 3 releases** in
+> reverse chronological order. Older cuts live in `docs/releases/`
+> and, until the changelog purge, in `CHANGELOG.md`.
+> The signed / GitHub payload is the this-cut extract under
+> `docs/releases/`, not this landing page.
 
 ---
 
 ## v0.1.3 — 2026-08-18
 
-crates.io enablement for the library crates. No library API change
+First crates.io cut for the library crates. No library API change
 is intended.
 
 ### Highlights
 
-- Workspace `publish` stays `false`. `waitprims-core`,
-  `waitprims-async`, and `waitprims-testkit` opt in with
-  `publish = true`. Each has a README and a docs.rs URL.
-- `waitprims-cli` inherits unpublished (diagnostic).
-- `make release-check` runs `cargo package --workspace`: packages
-  all workspace crates, including the unpublished CLI; publishes
-  none.
-- Consumers can pin `waitprims-async = "0.1"` after the crates.io
-  upload. A git tag pin still works.
+- `waitprims-core`, `waitprims-async`, and `waitprims-testkit` are
+  publishable. Workspace `publish` stays `false`; those three crates
+  opt in. Each has a README and a docs.rs URL.
+- `waitprims-cli` stays unpublished (diagnostic).
+- `make release-check` runs `cargo package --workspace`. That
+  packages all four workspace crates, including the unpublished
+  CLI, and does not publish.
 
 ### Upgrade notes
 
 - No public API change.
-- Replace a `v0.1.2` git pin with the crates.io version when that
-  upload is done. Same types and six `agent-wait/v0` kinds.
+- Depend on the library crates from crates.io
+  (`waitprims-async = "0.1"`). A git tag pin still works.
 - Signing is local MFA (`make release-sign` / `make release`). CI
   still drafts an unsigned GitHub release.
 
