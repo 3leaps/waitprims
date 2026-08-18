@@ -19,6 +19,7 @@ does not publish to crates.io or change repository visibility.
   checksums, sign, export-keys, upload. Verification runs once, as
   the upload grouping prerequisite.
 - CLI `--version` test tracks the workspace `VERSION` file.
+- Makefile `precommit` and `pr-final` sit beside `prepush`.
 
 ### Upgrade notes
 

@@ -81,7 +81,8 @@ cells (linux-x64, macos-arm64, windows-x64) on every push/PR. arm64 labs
 gate. Fork PRs do not run the arm64 cells. See
 [`.github/CI.md`](.github/CI.md) and [`docs/README.md`](docs/README.md).
 
-`make prepush` runs fmt, clippy, locked tests, and version-check.
+`make precommit` is fmt-check and clippy. `make prepush` and
+`make pr-final` add locked tests and version-check.
 `make release-check` packages the workspace and does not publish.
 See [`RELEASE_CHECKLIST.md`](RELEASE_CHECKLIST.md) for the later signed
 GitHub release flow.
