@@ -9,12 +9,11 @@ All notable changes to this project are documented in this file.
 crates.io enablement for the library crates. No library API change
 is intended.
 
-- `waitprims-core`, `waitprims-async`, and `waitprims-testkit` set
-  `publish = true` with docs.rs URLs and crate READMEs
-- `waitprims-cli` stays unpublished (workspace `publish` remains
-  `false`)
-- `make release-check` packages `waitprims-core`. Dependents
-  package after that crate is on the registry
+- `waitprims-core`, `waitprims-async`, and `waitprims-testkit` are
+  publishable, with docs.rs URLs and crate READMEs
+- `waitprims-cli` sets `publish = false` (diagnostic)
+- `make release-check` runs `cargo package --workspace` (same gate
+  as ipcprims)
 - README documents the crates.io pin; git tag pin still works
 
 ## [0.1.2]

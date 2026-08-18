@@ -7,7 +7,6 @@ repository.workspace = true
 homepage.workspace = true
 authors.workspace = true
 rust-version.workspace = true
-publish = true
 description = "Deterministic test helpers for waitprims"
 documentation = "https://docs.rs/waitprims-testkit"
 readme = "README.md"

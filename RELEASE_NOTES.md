@@ -15,10 +15,9 @@ is intended.
 
 - `waitprims-core`, `waitprims-async`, and `waitprims-testkit` are
   publishable. Each crate has a README and a docs.rs URL.
-- `waitprims-cli` stays unpublished. Workspace `publish` remains
-  `false` so new crates default unpublished.
-- `make release-check` packages `waitprims-core`. The two
-  dependents package after that crate is on the registry.
+- `waitprims-cli` sets `publish = false` (diagnostic).
+- `make release-check` runs `cargo package --workspace` (same gate
+  as ipcprims).
 - Consumers can pin `waitprims-async = "0.1"` after the crates.io
   upload. A git tag pin still works.
 

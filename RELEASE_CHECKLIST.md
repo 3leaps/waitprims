@@ -233,10 +233,9 @@ cargo publish -p waitprims-async
 cargo publish -p waitprims-testkit
 ```
 
-Do **not** publish `waitprims-cli`. `make release-check` packages
-`waitprims-core` only; it never runs `cargo publish`. Package
-`waitprims-async` and `waitprims-testkit` after core is on the
-registry.
+Do **not** publish `waitprims-cli`. `make release-check` runs
+`cargo package --workspace` (same gate as ipcprims) and never
+runs `cargo publish`.
 
 After upload, consumers can replace a git tag pin with:
 

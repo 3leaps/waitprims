@@ -223,12 +223,12 @@ version-check: ## Validate version consistency across files
 release-check: version-check ## Version consistency + package check (does not publish)
 	@echo "Checking release readiness..."
 	@echo ""
-	@echo "Packaging waitprims-core (does not cargo publish)..."
-	@# async and testkit rewrite path deps to crates.io versions. cargo
-	@# package cannot prepare those tarballs until waitprims-core is on
-	@# the registry. Package them after that first publish.
-	@$(CARGO) package -p waitprims-core
-	@echo "[ok] Package check passed (cli stays unpublished)"
+	@echo "Packaging workspace crates (does not cargo publish)..."
+	@# Same gate as ipcprims: cargo package --workspace verifies
+	@# dependents from a local tmp registry, so a first crates.io
+	@# upload is not required. waitprims-cli stays publish = false.
+	@$(CARGO) package --workspace
+	@echo "[ok] Package check passed"
 	@echo ""
 	@echo "Release checklist:"
 	@echo "  ✓ Version consistency validated"

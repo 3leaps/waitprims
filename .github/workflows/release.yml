@@ -65,7 +65,7 @@ jobs:
           toolchain: 1.88.0
 
       - name: Verify crates package (does not publish)
-        run: cargo package -p waitprims-core
+        run: cargo package --workspace
 
   build-cli:
     name: Build CLI (${{ matrix.artifact_suffix }})
@@ -235,4 +235,5 @@ jobs:
             | Windows x64 | `waitprims-*-windows-amd64.zip` |
             | Windows arm64 | `waitprims-*-windows-arm64.zip` |
 
-            Crates stay `publish = false`. This workflow does not run `cargo publish`.
+            Library crates are publishable. The diagnostic CLI is not.
+            This workflow does not run `cargo publish`.
