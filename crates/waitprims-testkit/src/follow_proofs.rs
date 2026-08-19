@@ -553,6 +553,64 @@ async fn pending_required_bind_at_deadline_is_terminal_failed() {
 }
 
 #[tokio::test]
+async fn deadline_emits_ready_burst_before_pending_required_bind() {
+    let set = two_arm_set();
+    let mut request = live_wait_request();
+    request.run_deadline = ts("2026-08-15T16:02:00Z");
+    request.logical_deadline = ts("2026-08-15T17:00:00Z");
+    let script = Script {
+        buffer_limit: 8,
+        events: vec![wait_event(
+            "reg:sms-1",
+            "sms_inbound",
+            "evt:sms-1",
+            "2026-08-15T16:02:00Z",
+        )],
+    };
+    let clock = FakeClock::auto(request.created_at.clone());
+    let observer = ScriptedObserver::new(script, clock.clone());
+    observer.hang_bind("reg:chanvoy-1");
+    let bursts = Arc::new(Mutex::new(Vec::new()));
+    let end = run_follow(&observer, &clock, &Cancel::new(), &set, &request, {
+        let bursts = bursts.clone();
+        move |burst| {
+            bursts.lock().expect("bursts").push(
+                burst
+                    .events
+                    .iter()
+                    .map(|event| event.event_id.as_str().to_string())
+                    .collect::<Vec<_>>(),
+            );
+            async { Ok(()) }
+        }
+    })
+    .await
+    .expect("follow");
+    assert_eq!(
+        *bursts.lock().expect("bursts"),
+        vec![vec!["evt:sms-1".to_string()]]
+    );
+    assert_eq!(
+        end,
+        FollowEnd::TerminalArm {
+            registration_id: IdToken::new("reg:chanvoy-1"),
+            kind: TerminalArmKind::Failed,
+            reason_code: IdToken::new("required_bind_pending"),
+        }
+    );
+    assert!(
+        observer
+            .queued_event_ids()
+            .get("reg:sms-1")
+            .map(Vec::is_empty)
+            .unwrap_or(true),
+        "emitted sibling event must not be restored: {:?}",
+        observer.queued_event_ids()
+    );
+    assert_eq!(observer.live_bind_count(), 0);
+}
+
+#[tokio::test]
 async fn drop_of_follow_future_releases_binds() {
     let set = registration_set(vec![registration(
         "reg:sms-1",

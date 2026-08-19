@@ -340,11 +340,6 @@ where
     if let Some(err) = posture_err(set, request, now) {
         return Some(finish_err(observer, slots, err));
     }
-    if at_deadline(request, now) && slots.pending_required(set).is_some() {
-        if let Some(end) = deadline_end(set, request, now, slots) {
-            return Some(finish_deadline(observer, slots, end));
-        }
-    }
     let events = slots.take_events();
     let terminal = slots.first_terminal(set);
     if !events.is_empty() {
@@ -402,18 +397,6 @@ where
 {
     restore_harvested(observer, slots)?;
     Err(err)
-}
-
-fn finish_deadline<O: Observer>(
-    observer: &O,
-    slots: &mut SlotSet<'_, O>,
-    end: FollowEnd,
-) -> Result<FollowEnd>
-where
-    O::Bind: 'static,
-{
-    restore_harvested(observer, slots)?;
-    Ok(end)
 }
 
 fn restore_harvested<O: Observer>(observer: &O, slots: &mut SlotSet<'_, O>) -> Result<()>
