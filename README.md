@@ -54,7 +54,7 @@ silently advance cursors.
 | Crate | Role |
 | ----- | ---- |
 | `waitprims-core` | Types, errors, validation, digest and time helpers |
-| `waitprims-async` | First-match and poll-cycle runners |
+| `waitprims-async` | First-match, poll-cycle, and held-follow runners |
 | `waitprims-testkit` | Fake clock and scripted observers |
 | `waitprims-cli` | Diagnostic CLI (`waitprims`); not on crates.io |
 

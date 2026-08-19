@@ -1,11 +1,12 @@
-//! Async first-match and poll-cycle runners.
+//! Async first-match, poll-cycle, and held-follow runners.
 //!
 //! Tokio is used for runtime, time, and synchronization only. This crate
 //! does not open network sockets and is not a daemon.
 //!
 //! Public JSON remains exactly the six `agent-wait/v0` message kinds.
 //! The observer seam (bind / next / cancel) is a runtime interface, not a
-//! wire type. Delivery and activation stay caller-owned or opaque refs;
+//! wire type. [`FollowBurst`] and [`FollowEnd`] are runtime-only.
+//! Delivery and activation stay caller-owned or opaque refs;
 //! runners do not collapse them into match.
 //!
 //! [`Cancel`] is a portable watch token. Deadlines use [`Clock`], not
@@ -16,6 +17,7 @@
 mod cancel;
 mod clock;
 mod first_match;
+mod follow;
 mod observer;
 mod outcome;
 mod poll_cycle;
@@ -24,6 +26,7 @@ mod race;
 pub use cancel::Cancel;
 pub use clock::Clock;
 pub use first_match::{run_first_match, TIE_RULE};
+pub use follow::{run_follow, FollowBurst, FollowEnd, TerminalArmKind};
 pub use observer::{BindHandle, Observation, Observer};
 pub use poll_cycle::{event_surface_bytes, run_poll_cycle, POLL_ACK_RETENTION};
 pub use waitprims_core::{Error, Result};
