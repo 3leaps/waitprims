@@ -1,4 +1,4 @@
-//! Proofs: held-follow lifecycle, lease boundary, inert priority.
+//! Proofs: held-follow lifecycle and lease boundary.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -7,13 +7,13 @@ use waitprims_async::{
     run_follow, BindHandle, Cancel, FollowEnd, Observation, Observer, TerminalArmKind,
 };
 use waitprims_core::{
-    registration_digest, validate_message, AgentWaitMessage, AuthnMode, Error, IdToken,
-    NormativeReason, OpaqueRef, Registration, Result, ValidationError,
+    AuthnMode, Error, IdToken, NormativeReason, OpaqueRef, Registration, Result, ValidationError,
+    WaitEvent,
 };
 
 use crate::{
-    live_wait_request, registration, registration_set, ts, wait_event, EndlessReadyObserver,
-    FakeClock, Script, ScriptedObserver, TrackedBind,
+    live_wait_request, registration, registration_set, resolve_start_at_bind, ts, wait_event,
+    BindTracker, EndlessReadyObserver, FakeClock, Script, ScriptedObserver, TrackedBind,
 };
 
 fn two_arm_set() -> waitprims_core::RegistrationSet {
@@ -759,6 +759,78 @@ async fn restore_error_fail_closes_and_releases() {
     assert_eq!(inner.live_bind_count(), 0);
 }
 
+/// Returns Idle until `event.observed_at`, then one Event via next or poll_ready.
+struct IdleThenReady {
+    tracker: BindTracker,
+    clock: FakeClock,
+    event: Mutex<Option<WaitEvent>>,
+}
+
+impl IdleThenReady {
+    fn new(clock: FakeClock, event: WaitEvent) -> Self {
+        Self {
+            tracker: BindTracker::new(),
+            clock,
+            event: Mutex::new(Some(event)),
+        }
+    }
+
+    fn live_bind_count(&self) -> usize {
+        self.tracker.live_count()
+    }
+
+    fn queued_event_id(&self) -> Option<String> {
+        self.event
+            .lock()
+            .expect("event")
+            .as_ref()
+            .map(|event| event.event_id.as_str().to_string())
+    }
+
+    fn take_due(&self) -> Option<Observation> {
+        let now = self.clock.current_time();
+        let mut slot = self.event.lock().expect("event");
+        let event = slot.as_ref()?;
+        if event.observed_at <= now {
+            return slot.take().map(|event| Observation::Event(Box::new(event)));
+        }
+        None
+    }
+}
+
+impl Observer for IdleThenReady {
+    type Bind = TrackedBind;
+
+    async fn bind(&self, registration: &Registration) -> Result<Self::Bind> {
+        self.tracker.acquire(registration.registration_id.as_str());
+        Ok(TrackedBind::new(
+            registration.registration_id.clone(),
+            resolve_start_at_bind(registration, None),
+            self.tracker.clone(),
+        ))
+    }
+
+    async fn next(&self, _bind: &Self::Bind) -> Result<Observation> {
+        Ok(self.take_due().unwrap_or(Observation::Idle))
+    }
+
+    async fn cancel(&self, bind: &Self::Bind) -> Result<()> {
+        self.tracker.cancel(bind.registration_id.as_str());
+        Ok(())
+    }
+
+    fn poll_ready(&self, _bind: &Self::Bind) -> Option<Observation> {
+        self.take_due()
+    }
+
+    fn restore_ready(&self, _bind: &Self::Bind, obs: Observation) -> Result<()> {
+        if let Observation::Event(event) = obs {
+            *self.event.lock().expect("event") = Some(*event);
+        }
+        Ok(())
+    }
+}
+
 struct RestoreFailOnCancel {
     inner: ScriptedObserver,
     cancel: Cancel,
@@ -823,70 +895,86 @@ async fn one_observation_per_slot_per_turn() {
 }
 
 #[tokio::test]
-async fn omitted_priority_digest_differs_from_explicit_fifty() {
-    let omitted = registration("reg:sms-1", "sms_inbound", "sms:inbox-1");
-    let omitted_json = serde_json::to_string(&vec![omitted.clone()]).expect("json");
-    assert!(
-        !omitted_json.contains("priority"),
-        "omission must not serialize priority: {omitted_json}"
-    );
-    let mut explicit = omitted.clone();
-    explicit.priority = Some(50);
-    let explicit_json = serde_json::to_string(&vec![explicit.clone()]).expect("json");
-    assert!(
-        explicit_json.contains("\"priority\":50"),
-        "explicit 50 must serialize: {explicit_json}"
-    );
-    let omitted_digest = registration_digest(&omitted_json).expect("digest");
-    let explicit_digest = registration_digest(&explicit_json).expect("digest");
-    assert_ne!(omitted_digest, explicit_digest);
-
-    let mut set = registration_set(vec![explicit]);
-    set.registration_digest.value = explicit_digest;
-    let json = serde_json::to_string(&AgentWaitMessage::RegistrationSet(set)).expect("set");
-    validate_message(&json).expect("priority 50 must admit");
-}
-
-#[tokio::test]
-async fn priority_does_not_reorder_follow_burst() {
-    let mut first = registration("reg:chanvoy-1", "chanvoy_wait", "chan:seat-a");
-    first.priority = Some(99);
-    let mut second = registration("reg:sms-1", "sms_inbound", "sms:inbox-1");
-    second.priority = Some(1);
-    let set = registration_set(vec![first, second]);
-    let request = live_wait_request();
-    let at = "2026-08-15T16:05:00Z";
-    let script = Script {
-        buffer_limit: 8,
-        events: vec![
-            wait_event("reg:sms-1", "sms_inbound", "evt:sms-1", at),
-            wait_event("reg:chanvoy-1", "chanvoy_wait", "evt:chanvoy-1", at),
-        ],
-    };
+async fn idle_then_event_at_deadline_emits_burst() {
+    let set = registration_set(vec![registration(
+        "reg:sms-1",
+        "sms_inbound",
+        "sms:inbox-1",
+    )]);
+    let mut request = live_wait_request();
+    request.run_deadline = ts("2026-08-15T16:05:00Z");
+    request.logical_deadline = ts("2026-08-15T17:00:00Z");
     let clock = FakeClock::auto(request.created_at.clone());
-    let observer = ScriptedObserver::new(script, clock.clone());
-    let cancel = Cancel::new();
-    let order = Arc::new(Mutex::new(Vec::new()));
-    let end = run_follow(&observer, &clock, &cancel, &set, &request, {
-        let order = order.clone();
-        let cancel = cancel.clone();
+    let observer = IdleThenReady::new(
+        clock.clone(),
+        wait_event(
+            "reg:sms-1",
+            "sms_inbound",
+            "evt:sms-1",
+            "2026-08-15T16:05:00Z",
+        ),
+    );
+    let bursts = Arc::new(Mutex::new(Vec::new()));
+    let end = run_follow(&observer, &clock, &Cancel::new(), &set, &request, {
+        let bursts = bursts.clone();
         move |burst| {
-            *order.lock().expect("order") = burst
-                .events
-                .iter()
-                .map(|event| event.registration_id.as_str().to_string())
-                .collect();
-            cancel.trigger();
+            bursts.lock().expect("bursts").push(
+                burst
+                    .events
+                    .iter()
+                    .map(|event| event.event_id.as_str().to_string())
+                    .collect::<Vec<_>>(),
+            );
             async { Ok(()) }
         }
     })
     .await
     .expect("follow");
-    assert_eq!(end, FollowEnd::Cancel);
+    assert_eq!(end, FollowEnd::Deadline);
     assert_eq!(
-        *order.lock().expect("order"),
-        vec!["reg:chanvoy-1".to_string(), "reg:sms-1".to_string()]
+        *bursts.lock().expect("bursts"),
+        vec![vec!["evt:sms-1".to_string()]]
     );
+    assert!(observer.queued_event_id().is_none());
+    assert_eq!(observer.live_bind_count(), 0);
+}
+
+#[tokio::test]
+async fn idle_then_event_at_lease_restores_without_sink() {
+    let mut leased = registration("reg:sms-1", "sms_inbound", "sms:inbox-1");
+    leased.lease_expires_at = ts("2026-08-15T16:02:00Z");
+    let set = registration_set(vec![leased]);
+    let request = live_wait_request();
+    let clock = FakeClock::auto(request.created_at.clone());
+    let observer = IdleThenReady::new(
+        clock.clone(),
+        wait_event(
+            "reg:sms-1",
+            "sms_inbound",
+            "evt:lease-1",
+            "2026-08-15T16:02:00Z",
+        ),
+    );
+    let bursts = Arc::new(Mutex::new(Vec::<String>::new()));
+    let err = run_follow(&observer, &clock, &Cancel::new(), &set, &request, {
+        let bursts = bursts.clone();
+        move |burst| {
+            bursts.lock().expect("bursts").extend(
+                burst
+                    .events
+                    .iter()
+                    .map(|event| event.event_id.as_str().to_string()),
+            );
+            async { Ok(()) }
+        }
+    })
+    .await
+    .expect_err("lease");
+    let err = norm(&err);
+    assert_eq!(err.reason, Some(NormativeReason::LeaseReauth));
+    assert!(bursts.lock().expect("bursts").is_empty());
+    assert_eq!(observer.queued_event_id().as_deref(), Some("evt:lease-1"));
+    assert_eq!(observer.live_bind_count(), 0);
 }
 
 #[tokio::test]

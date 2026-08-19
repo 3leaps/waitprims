@@ -40,9 +40,7 @@ than Unix 1ms; contract timestamps stay distinct.
 
 `run_follow` binds once per registration and emits runtime-only
 `FollowBurst` values until `FollowEnd` (cancel, deadline, or a
-fail-closed arm). It is not a seventh `agent-wait/v0` kind. Optional
-`Registration.priority` is inert: runners do not read it, and it is not
-authorization, grant, quota, or abort.
+fail-closed arm). It is not a seventh `agent-wait/v0` kind.
 
 ## Portable cancel
 

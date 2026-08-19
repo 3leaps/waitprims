@@ -61,7 +61,6 @@ pub fn registration(registration_id: &str, method_id: &str, subject_id: &str) ->
             max_events: 50,
             max_bytes: 524_288,
         },
-        priority: None,
         start_anchor: Some(Anchor {
             kind: AnchorKind::ProviderOpaque,
             value: IdToken::new("anc:cursor-0"),
@@ -90,7 +89,6 @@ pub fn registration_baseline(
             max_events: 50,
             max_bytes: 524_288,
         },
-        priority: None,
         start_anchor: None,
         baseline_policy: Some(BaselinePolicy::Latest),
     }

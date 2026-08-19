@@ -125,16 +125,19 @@ where
                         slots.clear_nonreplayable();
                         backoff_step = backoff_step.saturating_add(1);
                         sleep_backoff(clock, cancel, set, request, backoff_step).await;
-                        if cancel.is_cancelled() {
-                            break finish_cancel(observer, &mut slots);
+                        if let Some(done) = on_wake(
+                            observer,
+                            cancel,
+                            set,
+                            request,
+                            &mut slots,
+                            &clock.now(),
+                            &mut on_burst,
+                        )
+                        .await
+                        {
+                            break done;
                         }
-                        if let Some(err) = posture_err(set, request, &clock.now()) {
-                            break finish_err(observer, &mut slots, err);
-                        }
-                        if let Some(end) = deadline_end(set, request, &clock.now(), &slots) {
-                            break finish_deadline(observer, &mut slots, end);
-                        }
-                        slots.rearm_idle();
                     }
                     Ok(Turn::Ready) => {
                         if cancel.is_cancelled() {
@@ -162,36 +165,19 @@ where
                 break finish_cancel(observer, &mut slots);
             }
             _ = clock.sleep_until(&wake) => {
-                let now = clock.now();
-                poll_once(&mut slots).await;
-                slots.harvest_poll_ready(observer);
-                if cancel.is_cancelled() {
-                    break finish_cancel(observer, &mut slots);
+                if let Some(done) = on_wake(
+                    observer,
+                    cancel,
+                    set,
+                    request,
+                    &mut slots,
+                    &clock.now(),
+                    &mut on_burst,
+                )
+                .await
+                {
+                    break done;
                 }
-                if let Some(err) = posture_err(set, request, &now) {
-                    break finish_err(observer, &mut slots, err);
-                }
-                if at_deadline(request, &now) && slots.pending_required(set).is_some() {
-                    if let Some(end) = deadline_end(set, request, &now, &slots) {
-                        break finish_deadline(observer, &mut slots, end);
-                    }
-                }
-                let events = slots.take_events();
-                let terminal = slots.first_terminal(set);
-                if !events.is_empty() {
-                    if let Err(err) = on_burst(FollowBurst { events }).await {
-                        break Err(err);
-                    }
-                }
-                if let Some(end) = terminal {
-                    break Ok(end);
-                }
-                if at_deadline(request, &now) {
-                    if let Some(end) = deadline_end(set, request, &now, &slots) {
-                        break Ok(end);
-                    }
-                }
-                slots.rearm_idle();
             }
         }
     };
@@ -326,6 +312,56 @@ async fn sleep_backoff<C: Clock>(
         _ = cancel.cancelled() => {}
         _ = clock.sleep_until(&sleep_to) => {}
     }
+}
+
+/// Harvest already-ready slots, then apply cancel / posture / deadline.
+/// Used after request-deadline and lease wakes, and after Idle backoff
+/// that may have been capped at those same boundaries.
+async fn on_wake<O, S, Fut>(
+    observer: &O,
+    cancel: &Cancel,
+    set: &RegistrationSet,
+    request: &LiveWaitRequest,
+    slots: &mut SlotSet<'_, O>,
+    now: &Timestamp,
+    on_burst: &mut S,
+) -> Option<Result<FollowEnd>>
+where
+    O: Observer,
+    O::Bind: 'static,
+    S: FnMut(FollowBurst) -> Fut,
+    Fut: Future<Output = Result<()>>,
+{
+    poll_once(slots).await;
+    slots.harvest_poll_ready(observer);
+    if cancel.is_cancelled() {
+        return Some(finish_cancel(observer, slots));
+    }
+    if let Some(err) = posture_err(set, request, now) {
+        return Some(finish_err(observer, slots, err));
+    }
+    if at_deadline(request, now) && slots.pending_required(set).is_some() {
+        if let Some(end) = deadline_end(set, request, now, slots) {
+            return Some(finish_deadline(observer, slots, end));
+        }
+    }
+    let events = slots.take_events();
+    let terminal = slots.first_terminal(set);
+    if !events.is_empty() {
+        if let Err(err) = on_burst(FollowBurst { events }).await {
+            return Some(Err(err));
+        }
+    }
+    if let Some(end) = terminal {
+        return Some(Ok(end));
+    }
+    if at_deadline(request, now) {
+        if let Some(end) = deadline_end(set, request, now, slots) {
+            return Some(Ok(end));
+        }
+    }
+    slots.rearm_idle();
+    None
 }
 
 async fn poll_once<O: Observer>(slots: &mut SlotSet<'_, O>)
