@@ -18,7 +18,10 @@
 .DS_Store
 .idea/
 .vscode/
-.cursor/
+# Ignore local Cursor state, but track the committed Cloud Agent env config.
+.cursor/*
+!.cursor/environment.json
+!.cursor/install.sh
 *.swp
 *.swo
 *~

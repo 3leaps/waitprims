@@ -96,6 +96,21 @@ MIT OR Apache-2.0. All dependencies must stay permissively licensed.
 | `RELEASE_CHECKLIST.md` | Write/prep vs maintainer MFA sign/upload |
 | `Makefile` | version-sync, precommit, prepush, pr-final, release-* |
 
+## Cursor Cloud specific instructions
+
+This repo owns the Cloud Agent environment config for the prims workspace, with
+**waitprims as the primary repo**. See `.cursor/environment.json` and
+`.cursor/install.sh`.
+
+- Multi-repo: `crucible` and `3leaps-productbook-internal` are declared as
+  `repositoryDependencies`; the install script sets each up when present and
+  still succeeds on a single-repo checkout.
+- The install script pins the Rust toolchain to `1.88.0` (this repo's
+  `rust-version`), installs `bun` + `goneat` + foundation lint tools, and
+  places binaries in `~/.local/bin` and `~/.bun/bin`.
+- Per-repo quality gates: `make check` (this repo), `make check` (crucible),
+  `make quality` (productbook). Run them from each repo root.
+
 ## Contact
 
 Lead maintainer: see repository owners when a remote exists.

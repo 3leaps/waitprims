@@ -1,0 +1,8 @@
+{
+  "name": "prims workspace (waitprims primary)",
+  "install": "bash .cursor/install.sh",
+  "repositoryDependencies": [
+    "github.com/3leaps/crucible",
+    "github.com/3leaps/3leaps-productbook-internal"
+  ]
+}
