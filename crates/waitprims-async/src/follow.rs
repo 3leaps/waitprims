@@ -107,11 +107,11 @@ where
     let mut slots = SlotSet::new(observer, &set.registrations);
     let mut backoff_step = 0usize;
     let outcome = loop {
-        if cancel.is_cancelled() {
-            break finish_cancel(observer, &mut slots);
-        }
         if let Some(err) = posture_err(set, request, &clock.now()) {
             break finish_err(observer, &mut slots, err);
+        }
+        if cancel.is_cancelled() {
+            break finish_cancel(observer, &mut slots);
         }
 
         let wake = earliest_wake(set, request);
@@ -120,9 +120,13 @@ where
             biased;
             result = &mut collect => {
                 match result {
-                    Err(err) => break finish_err(observer, &mut slots, err),
+                    Err(err) => {
+                        if let Some(posture) = posture_err(set, request, &clock.now()) {
+                            break finish_err(observer, &mut slots, posture);
+                        }
+                        break finish_err(observer, &mut slots, err);
+                    }
                     Ok(Turn::Idle) => {
-                        slots.clear_nonreplayable();
                         backoff_step = backoff_step.saturating_add(1);
                         sleep_backoff(clock, cancel, set, request, backoff_step).await;
                         if let Some(done) = on_wake(
@@ -140,29 +144,37 @@ where
                         }
                     }
                     Ok(Turn::Ready) => {
-                        if cancel.is_cancelled() {
-                            break finish_cancel(observer, &mut slots);
+                        if let Some(done) = decide_turn(
+                            observer,
+                            cancel,
+                            set,
+                            request,
+                            &mut slots,
+                            &clock.now(),
+                            &mut on_burst,
+                        )
+                        .await
+                        {
+                            break done;
                         }
-                        if let Some(err) = posture_err(set, request, &clock.now()) {
-                            break finish_err(observer, &mut slots, err);
-                        }
-                        let events = slots.take_events();
-                        let terminal = slots.first_terminal(set);
-                        if !events.is_empty() {
-                            if let Err(err) = on_burst(FollowBurst { events }).await {
-                                break Err(err);
-                            }
-                        }
-                        if let Some(end) = terminal {
-                            break Ok(end);
-                        }
-                        slots.rearm_idle();
                     }
                 }
             }
             _ = cancel.cancelled() => {
                 poll_once(&mut slots).await;
-                break finish_cancel(observer, &mut slots);
+                if let Some(done) = decide_turn(
+                    observer,
+                    cancel,
+                    set,
+                    request,
+                    &mut slots,
+                    &clock.now(),
+                    &mut on_burst,
+                )
+                .await
+                {
+                    break done;
+                }
             }
             _ = clock.sleep_until(&wake) => {
                 if let Some(done) = on_wake(
@@ -314,7 +326,7 @@ async fn sleep_backoff<C: Clock>(
     }
 }
 
-/// Harvest already-ready slots, then apply cancel / posture / deadline.
+/// Re-arm Idle slots, poll through `next`, then decide.
 /// Used after request-deadline and lease wakes, and after Idle backoff
 /// that may have been capped at those same boundaries.
 async fn on_wake<O, S, Fut>(
@@ -332,13 +344,36 @@ where
     S: FnMut(FollowBurst) -> Fut,
     Fut: Future<Output = Result<()>>,
 {
+    slots.rearm_idle();
     poll_once(slots).await;
     slots.harvest_poll_ready(observer);
-    if cancel.is_cancelled() {
-        return Some(finish_cancel(observer, slots));
-    }
+    decide_turn(observer, cancel, set, request, slots, now, on_burst).await
+}
+
+/// Posture, then observer `fault`, then pre-sink Cancel, then burst/terminal/deadline.
+async fn decide_turn<O, S, Fut>(
+    observer: &O,
+    cancel: &Cancel,
+    set: &RegistrationSet,
+    request: &LiveWaitRequest,
+    slots: &mut SlotSet<'_, O>,
+    now: &Timestamp,
+    on_burst: &mut S,
+) -> Option<Result<FollowEnd>>
+where
+    O: Observer,
+    O::Bind: 'static,
+    S: FnMut(FollowBurst) -> Fut,
+    Fut: Future<Output = Result<()>>,
+{
     if let Some(err) = posture_err(set, request, now) {
         return Some(finish_err(observer, slots, err));
+    }
+    if let Some(err) = slots.fault.take() {
+        return Some(finish_err(observer, slots, err));
+    }
+    if cancel.is_cancelled() {
+        return Some(finish_cancel(observer, slots));
     }
     let events = slots.take_events();
     let terminal = slots.first_terminal(set);
@@ -633,15 +668,10 @@ where
         }
     }
 
-    fn all_idle_bound(&self) -> bool {
-        if self.registrations.is_empty() {
-            return false;
-        }
-        self.binds.iter().all(|bind| bind.is_some())
-            && self
-                .harvested
-                .iter()
-                .all(|obs| matches!(obs, Some(Observation::Idle)))
+    fn any_idle_harvested(&self) -> bool {
+        self.harvested
+            .iter()
+            .any(|obs| matches!(obs, Some(Observation::Idle)))
     }
 
     fn has_terminal_obs(&self) -> bool {
@@ -671,7 +701,7 @@ where
         if slots.has_terminal_obs() {
             return Poll::Ready(Ok(Turn::Ready));
         }
-        if slots.all_idle_bound() {
+        if slots.any_idle_harvested() {
             return Poll::Ready(Ok(Turn::Idle));
         }
         Poll::Pending

@@ -37,6 +37,7 @@ async fn ok_sink(_burst: waitprims_async::FollowBurst) -> Result<()> {
 struct CountBinds {
     inner: ScriptedObserver,
     binds: Arc<AtomicU64>,
+    nexts: Arc<AtomicU64>,
 }
 
 impl Observer for CountBinds {
@@ -48,6 +49,7 @@ impl Observer for CountBinds {
     }
 
     async fn next(&self, bind: &Self::Bind) -> Result<Observation> {
+        self.nexts.fetch_add(1, Ordering::Relaxed);
         self.inner.next(bind).await
     }
 
@@ -137,9 +139,11 @@ async fn two_emissions_same_binds() {
     let clock = FakeClock::auto(request.created_at.clone());
     let inner = ScriptedObserver::new(script, clock.clone());
     let binds = Arc::new(AtomicU64::new(0));
+    let nexts = Arc::new(AtomicU64::new(0));
     let observer = CountBinds {
         inner: inner.clone(),
         binds: binds.clone(),
+        nexts: nexts.clone(),
     };
     let cancel = Cancel::new();
     let bursts = Arc::new(Mutex::new(Vec::new()));
@@ -806,22 +810,33 @@ async fn restore_error_fail_closes_and_releases() {
     let clock = FakeClock::auto(request.created_at.clone());
     let inner = ScriptedObserver::new(script, clock.clone());
     let cancel = Cancel::new();
+    let attempts = Arc::new(Mutex::new(Vec::new()));
     let observer = RestoreFailOnCancel {
         inner: inner.clone(),
         cancel: cancel.clone(),
+        attempts: attempts.clone(),
     };
     let err = run_follow(&observer, &clock, &cancel, &set, &request, ok_sink)
         .await
         .expect_err("restore");
     assert!(err.to_string().contains("restore_failed"), "{err}");
+    let attempts = attempts.lock().expect("attempts");
+    assert_eq!(
+        attempts.len(),
+        2,
+        "restore-all must attempt every slot: {attempts:?}"
+    );
     assert_eq!(inner.live_bind_count(), 0);
 }
 
-/// Returns Idle until `event.observed_at`, then one Event via next or poll_ready.
+/// Returns Idle until `event.observed_at`, then one Event via next (and optionally poll_ready).
 struct IdleThenReady {
     tracker: BindTracker,
     clock: FakeClock,
     event: Mutex<Option<WaitEvent>>,
+    hang: String,
+    poll_ready: bool,
+    nexts: Arc<Mutex<Vec<String>>>,
 }
 
 impl IdleThenReady {
@@ -830,7 +845,25 @@ impl IdleThenReady {
             tracker: BindTracker::new(),
             clock,
             event: Mutex::new(Some(event)),
+            hang: String::new(),
+            poll_ready: true,
+            nexts: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    fn next_only(clock: FakeClock, event: WaitEvent) -> Self {
+        let mut this = Self::new(clock, event);
+        this.poll_ready = false;
+        this
+    }
+
+    fn hang_bind(mut self, registration_id: &str) -> Self {
+        self.hang = registration_id.to_string();
+        self
+    }
+
+    fn next_calls(&self) -> Vec<String> {
+        self.nexts.lock().expect("nexts").clone()
     }
 
     fn live_bind_count(&self) -> usize {
@@ -860,6 +893,9 @@ impl Observer for IdleThenReady {
     type Bind = TrackedBind;
 
     async fn bind(&self, registration: &Registration) -> Result<Self::Bind> {
+        if registration.registration_id.as_str() == self.hang {
+            std::future::pending::<()>().await;
+        }
         self.tracker.acquire(registration.registration_id.as_str());
         Ok(TrackedBind::new(
             registration.registration_id.clone(),
@@ -868,7 +904,11 @@ impl Observer for IdleThenReady {
         ))
     }
 
-    async fn next(&self, _bind: &Self::Bind) -> Result<Observation> {
+    async fn next(&self, bind: &Self::Bind) -> Result<Observation> {
+        self.nexts
+            .lock()
+            .expect("nexts")
+            .push(bind.registration_id.as_str().to_string());
         Ok(self.take_due().unwrap_or(Observation::Idle))
     }
 
@@ -878,6 +918,9 @@ impl Observer for IdleThenReady {
     }
 
     fn poll_ready(&self, _bind: &Self::Bind) -> Option<Observation> {
+        if !self.poll_ready {
+            return None;
+        }
         self.take_due()
     }
 
@@ -892,6 +935,7 @@ impl Observer for IdleThenReady {
 struct RestoreFailOnCancel {
     inner: ScriptedObserver,
     cancel: Cancel,
+    attempts: Arc<Mutex<Vec<String>>>,
 }
 
 impl Observer for RestoreFailOnCancel {
@@ -911,12 +955,20 @@ impl Observer for RestoreFailOnCancel {
         self.inner.cancel(bind).await
     }
 
-    fn restore_ready(&self, bind: &Self::Bind, _obs: Observation) -> Result<()> {
-        Err(ValidationError::new(
-            "/observer/restore_ready",
-            format!("restore_failed:{}", bind.registration_id().as_str()),
-        )
-        .into())
+    fn restore_ready(&self, bind: &Self::Bind, obs: Observation) -> Result<()> {
+        self.attempts
+            .lock()
+            .expect("attempts")
+            .push(bind.registration_id().as_str().to_string());
+        let first = self.attempts.lock().expect("attempts").len() == 1;
+        if first {
+            return Err(ValidationError::new(
+                "/observer/restore_ready",
+                format!("restore_failed:{}", bind.registration_id().as_str()),
+            )
+            .into());
+        }
+        self.inner.restore_ready(bind, obs)
     }
 }
 
@@ -1033,6 +1085,276 @@ async fn idle_then_event_at_lease_restores_without_sink() {
     assert!(bursts.lock().expect("bursts").is_empty());
     assert_eq!(observer.queued_event_id().as_deref(), Some("evt:lease-1"));
     assert_eq!(observer.live_bind_count(), 0);
+}
+
+#[tokio::test]
+async fn idle_event_emits_while_sibling_bind_pending() {
+    let set = two_arm_set();
+    let mut request = live_wait_request();
+    request.run_deadline = ts("2026-08-15T16:20:00Z");
+    let clock = FakeClock::auto(request.created_at.clone());
+    let observer = IdleThenReady::new(
+        clock.clone(),
+        wait_event(
+            "reg:sms-1",
+            "sms_inbound",
+            "evt:sms-1",
+            "2026-08-15T16:03:00Z",
+        ),
+    )
+    .hang_bind("reg:chanvoy-1");
+    let bursts = Arc::new(Mutex::new(Vec::new()));
+    let end = run_follow(&observer, &clock, &Cancel::new(), &set, &request, {
+        let bursts = bursts.clone();
+        move |burst| {
+            bursts.lock().expect("bursts").push(
+                burst
+                    .events
+                    .iter()
+                    .map(|event| event.event_id.as_str().to_string())
+                    .collect::<Vec<_>>(),
+            );
+            async { Ok(()) }
+        }
+    })
+    .await
+    .expect("follow");
+    assert_eq!(
+        *bursts.lock().expect("bursts"),
+        vec![vec!["evt:sms-1".to_string()]]
+    );
+    assert!(
+        clock.current_time() >= ts("2026-08-15T16:03:00Z"),
+        "event arm must re-arm before deadline, not stay parked Idle"
+    );
+    assert_eq!(
+        end,
+        FollowEnd::TerminalArm {
+            registration_id: IdToken::new("reg:chanvoy-1"),
+            kind: TerminalArmKind::Failed,
+            reason_code: IdToken::new("required_bind_pending"),
+        }
+    );
+    assert!(
+        observer.next_calls().contains(&"reg:sms-1".to_string()),
+        "sms next must be called more than the first Idle: {:?}",
+        observer.next_calls()
+    );
+    assert_eq!(observer.live_bind_count(), 0);
+}
+
+#[tokio::test]
+async fn next_only_idle_then_event_at_deadline() {
+    let set = registration_set(vec![registration(
+        "reg:sms-1",
+        "sms_inbound",
+        "sms:inbox-1",
+    )]);
+    let mut request = live_wait_request();
+    request.run_deadline = ts("2026-08-15T16:05:00Z");
+    request.logical_deadline = ts("2026-08-15T17:00:00Z");
+    let clock = FakeClock::auto(request.created_at.clone());
+    let observer = IdleThenReady::next_only(
+        clock.clone(),
+        wait_event(
+            "reg:sms-1",
+            "sms_inbound",
+            "evt:sms-1",
+            "2026-08-15T16:05:00Z",
+        ),
+    );
+    let bursts = Arc::new(Mutex::new(Vec::new()));
+    let end = run_follow(&observer, &clock, &Cancel::new(), &set, &request, {
+        let bursts = bursts.clone();
+        move |burst| {
+            bursts.lock().expect("bursts").push(
+                burst
+                    .events
+                    .iter()
+                    .map(|event| event.event_id.as_str().to_string())
+                    .collect::<Vec<_>>(),
+            );
+            async { Ok(()) }
+        }
+    })
+    .await
+    .expect("follow");
+    assert_eq!(end, FollowEnd::Deadline);
+    assert_eq!(
+        *bursts.lock().expect("bursts"),
+        vec![vec!["evt:sms-1".to_string()]]
+    );
+    assert_eq!(observer.live_bind_count(), 0);
+}
+
+#[tokio::test]
+async fn next_only_idle_then_event_at_lease() {
+    let mut leased = registration("reg:sms-1", "sms_inbound", "sms:inbox-1");
+    leased.lease_expires_at = ts("2026-08-15T16:02:00Z");
+    let set = registration_set(vec![leased]);
+    let request = live_wait_request();
+    let clock = FakeClock::auto(request.created_at.clone());
+    let observer = IdleThenReady::next_only(
+        clock.clone(),
+        wait_event(
+            "reg:sms-1",
+            "sms_inbound",
+            "evt:lease-1",
+            "2026-08-15T16:02:00Z",
+        ),
+    );
+    let bursts = Arc::new(Mutex::new(Vec::<String>::new()));
+    let err = run_follow(&observer, &clock, &Cancel::new(), &set, &request, {
+        let bursts = bursts.clone();
+        move |burst| {
+            bursts.lock().expect("bursts").extend(
+                burst
+                    .events
+                    .iter()
+                    .map(|event| event.event_id.as_str().to_string()),
+            );
+            async { Ok(()) }
+        }
+    })
+    .await
+    .expect_err("lease");
+    let err = norm(&err);
+    assert_eq!(err.reason, Some(NormativeReason::LeaseReauth));
+    assert!(bursts.lock().expect("bursts").is_empty());
+    assert_eq!(observer.queued_event_id().as_deref(), Some("evt:lease-1"));
+    assert_eq!(observer.live_bind_count(), 0);
+}
+
+#[tokio::test]
+async fn expired_lease_outranks_pretriggered_cancel() {
+    let mut leased = registration("reg:sms-1", "sms_inbound", "sms:inbox-1");
+    leased.lease_expires_at = ts("2026-08-15T16:01:00Z");
+    let set = registration_set(vec![leased]);
+    let request = live_wait_request();
+    let clock = FakeClock::auto(request.created_at.clone());
+    let observer = ScriptedObserver::new(Script::default(), clock.clone());
+    let cancel = Cancel::new();
+    cancel.trigger();
+    let err = run_follow(&observer, &clock, &cancel, &set, &request, ok_sink)
+        .await
+        .expect_err("lease");
+    let err = norm(&err);
+    assert_eq!(err.reason, Some(NormativeReason::LeaseReauth));
+    assert_eq!(observer.live_bind_count(), 0);
+}
+
+struct FailThenCancel {
+    inner: ScriptedObserver,
+    fail: String,
+    cancel: Cancel,
+}
+
+impl Observer for FailThenCancel {
+    type Bind = TrackedBind;
+
+    async fn bind(&self, registration: &Registration) -> Result<Self::Bind> {
+        self.inner.bind(registration).await
+    }
+
+    async fn next(&self, bind: &Self::Bind) -> Result<Observation> {
+        if bind.registration_id.as_str() == self.fail {
+            self.cancel.trigger();
+            return Err(ValidationError::new("/observer", "injected_arm_error").into());
+        }
+        self.inner.next(bind).await
+    }
+
+    async fn cancel(&self, bind: &Self::Bind) -> Result<()> {
+        self.inner.cancel(bind).await
+    }
+
+    fn restore_ready(&self, bind: &Self::Bind, obs: Observation) -> Result<()> {
+        self.inner.restore_ready(bind, obs)
+    }
+}
+
+#[tokio::test]
+async fn observer_err_outranks_same_turn_cancel() {
+    let set = two_arm_set();
+    let request = live_wait_request();
+    let at = "2026-08-15T16:05:00Z";
+    let script = Script {
+        buffer_limit: 8,
+        events: vec![
+            wait_event("reg:chanvoy-1", "chanvoy_wait", "evt:chanvoy-1", at),
+            wait_event("reg:sms-1", "sms_inbound", "evt:sms-1", at),
+        ],
+    };
+    let clock = FakeClock::auto(request.created_at.clone());
+    let inner = ScriptedObserver::new(script, clock.clone());
+    let cancel = Cancel::new();
+    let observer = FailThenCancel {
+        inner: inner.clone(),
+        fail: "reg:sms-1".to_string(),
+        cancel: cancel.clone(),
+    };
+    let err = run_follow(&observer, &clock, &cancel, &set, &request, ok_sink)
+        .await
+        .expect_err("observer err");
+    assert!(err.to_string().contains("injected_arm_error"), "{err}");
+    assert_eq!(
+        inner
+            .queued_event_ids()
+            .get("reg:chanvoy-1")
+            .map(Vec::as_slice),
+        Some(["evt:chanvoy-1".to_string()].as_slice())
+    );
+    assert_eq!(inner.live_bind_count(), 0);
+}
+
+#[tokio::test]
+async fn observer_err_at_deadline_does_not_emit_or_become_deadline() {
+    let set = two_arm_set();
+    let mut request = live_wait_request();
+    request.run_deadline = ts("2026-08-15T16:05:00Z");
+    let at = "2026-08-15T16:05:00Z";
+    let script = Script {
+        buffer_limit: 8,
+        events: vec![
+            wait_event("reg:chanvoy-1", "chanvoy_wait", "evt:chanvoy-1", at),
+            wait_event("reg:sms-1", "sms_inbound", "evt:sms-1", at),
+        ],
+    };
+    let clock = FakeClock::auto(request.created_at.clone());
+    let inner = ScriptedObserver::new(script, clock.clone());
+    let observer = EventPlusError {
+        inner: inner.clone(),
+        fail: "reg:sms-1".to_string(),
+    };
+    let bursts = Arc::new(Mutex::new(Vec::<String>::new()));
+    let err = run_follow(&observer, &clock, &Cancel::new(), &set, &request, {
+        let bursts = bursts.clone();
+        move |burst| {
+            bursts.lock().expect("bursts").extend(
+                burst
+                    .events
+                    .iter()
+                    .map(|event| event.event_id.as_str().to_string()),
+            );
+            async { Ok(()) }
+        }
+    })
+    .await
+    .expect_err("observer err");
+    assert!(err.to_string().contains("injected_arm_error"), "{err}");
+    assert!(
+        bursts.lock().expect("bursts").is_empty(),
+        "observer Err must not emit a sibling burst: {:?}",
+        bursts.lock().expect("bursts")
+    );
+    assert_eq!(
+        inner
+            .queued_event_ids()
+            .get("reg:chanvoy-1")
+            .map(Vec::as_slice),
+        Some(["evt:chanvoy-1".to_string()].as_slice())
+    );
+    assert_eq!(inner.live_bind_count(), 0);
 }
 
 #[tokio::test]
