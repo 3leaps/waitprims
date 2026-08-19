@@ -12,6 +12,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- `run_follow` held-follow runner: bind once, emit `FollowBurst`, stop
+  on runtime-only `FollowEnd`. No new `agent-wait/v0` kind
+- Optional inert `Registration.priority`. Omission leaves the digest
+  unchanged; explicit `50` does not. Runners do not read the field; it
+  is not authorization, grant, quota, or abort
+- Follow lease posture rejects at `now >= lease_expires_at`. First-match
+  still uses `now >`
+
 ## [0.1.3] - 2026-08-18
 
 First crates.io cut for the library crates. No library API change

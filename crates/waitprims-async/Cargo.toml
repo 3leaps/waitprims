@@ -8,7 +8,7 @@ homepage.workspace = true
 authors.workspace = true
 rust-version.workspace = true
 publish = true
-description = "Async first-match and poll-cycle runners for waitprims"
+description = "Async first-match, poll-cycle, and held-follow runners for waitprims"
 documentation = "https://docs.rs/waitprims-async"
 readme = "README.md"
 

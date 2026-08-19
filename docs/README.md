@@ -36,6 +36,14 @@ and poll-ack use contract timestamps and registration-set order. Do not
 key uniqueness on a wall `sleep`. Windows timer granularity is coarser
 than Unix 1ms; contract timestamps stay distinct.
 
+## Held follow
+
+`run_follow` binds once per registration and emits runtime-only
+`FollowBurst` values until `FollowEnd` (cancel, deadline, or a
+fail-closed arm). It is not a seventh `agent-wait/v0` kind. Optional
+`Registration.priority` is inert: runners do not read it, and it is not
+authorization, grant, quota, or abort.
+
 ## Portable cancel
 
 `Cancel` is a cloneable watch token. Deadlines use `Clock`, not `EINTR`,
@@ -54,7 +62,7 @@ schema. Point callers at [`schemas/v0/`](../schemas/v0/). The schema
 | Crate | Role |
 | ----- | ---- |
 | `waitprims-core` | Types, errors, validation, digest and RFC3339 helpers |
-| `waitprims-async` | First-match and poll-cycle runners |
+| `waitprims-async` | First-match, poll-cycle, and held-follow runners |
 | `waitprims-testkit` | Fake clock and scripted observers |
 | `waitprims-cli` | Diagnostic binary (`waitprims`); not on crates.io |
 

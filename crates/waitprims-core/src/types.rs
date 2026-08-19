@@ -173,6 +173,13 @@ pub struct Registration {
     pub lease_expires_at: Timestamp,
     /// Per-registration bounds.
     pub bounds: WaitBound,
+    /// Optional inert ordering hint. Omitted on the wire.
+    ///
+    /// Not authorization, grant, quota, or abort. First-match, poll-cycle,
+    /// and follow runners do not read this field. Explicit `50` is not the
+    /// same digest as omission.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<u8>,
     /// Exclusive continuation cursor. XOR with `baseline_policy`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub start_anchor: Option<Anchor>,
