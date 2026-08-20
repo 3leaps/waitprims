@@ -4,14 +4,14 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use waitprims_async::{
-    run_coalesce, run_follow, Cancel, CoalescePolicy, FollowEnd, Observation, Observer,
+    run_coalesce, run_follow, BindHandle, Cancel, CoalescePolicy, FollowEnd, Observation, Observer,
     TerminalArmKind,
 };
-use waitprims_core::{Registration, Result, ValidationError, PRIORITY_URGENT};
+use waitprims_core::{NormativeReason, Registration, Result, ValidationError, PRIORITY_URGENT};
 
 use crate::{
     live_wait_request, registration, registration_set, ts, wait_event, with_priority, FakeClock,
-    Script, ScriptedObserver, TrackedBind,
+    IdleObserver, Script, ScriptedObserver, TrackedBind,
 };
 
 fn ids(bursts: &Mutex<Vec<Vec<String>>>) -> Vec<Vec<String>> {
@@ -260,6 +260,15 @@ async fn pending_overflow_is_fail_closed() {
             kind: TerminalArmKind::Overflow,
             reason_code: waitprims_core::IdToken::new("buffer_overflow"),
         }
+    );
+    assert_eq!(
+        observer
+            .queued_event_ids()
+            .get("reg:sms-1")
+            .map(Vec::as_slice),
+        Some(["evt:1".to_string(), "evt:2".to_string()].as_slice()),
+        "overflow must restore unsunk events: {:?}",
+        observer.queued_event_ids()
     );
     assert_eq!(observer.live_bind_count(), 0);
 }
@@ -693,6 +702,356 @@ async fn buffered_quiet_then_posture_err_restores() {
         Some(["evt:held".to_string()].as_slice()),
         "buffered quiet must be restored on posture err: {:?}",
         observer.queued_event_ids()
+    );
+    assert_eq!(observer.live_bind_count(), 0);
+}
+
+fn lease_err(err: &waitprims_core::Error) -> &waitprims_core::ValidationError {
+    match err {
+        waitprims_core::Error::Validation(err) => err,
+        other => panic!("expected validation, got {other}"),
+    }
+}
+
+struct IdleAndScripted {
+    idle_id: String,
+    inner: ScriptedObserver,
+    idle: IdleObserver,
+}
+
+impl Observer for IdleAndScripted {
+    type Bind = TrackedBind;
+
+    async fn bind(&self, registration: &Registration) -> Result<Self::Bind> {
+        if registration.registration_id.as_str() == self.idle_id {
+            self.idle.bind(registration).await
+        } else {
+            self.inner.bind(registration).await
+        }
+    }
+
+    async fn next(&self, bind: &Self::Bind) -> Result<Observation> {
+        if bind.registration_id.as_str() == self.idle_id {
+            self.idle.next(bind).await
+        } else {
+            self.inner.next(bind).await
+        }
+    }
+
+    async fn cancel(&self, bind: &Self::Bind) -> Result<()> {
+        if bind.registration_id.as_str() == self.idle_id {
+            self.idle.cancel(bind).await
+        } else {
+            self.inner.cancel(bind).await
+        }
+    }
+
+    fn restore_ready(&self, bind: &Self::Bind, obs: Observation) -> Result<()> {
+        if bind.registration_id.as_str() == self.idle_id {
+            self.idle.restore_ready(bind, obs)
+        } else {
+            self.inner.restore_ready(bind, obs)
+        }
+    }
+}
+
+struct RestoreFailAlways {
+    inner: ScriptedObserver,
+    attempts: Arc<Mutex<Vec<String>>>,
+}
+
+impl Observer for RestoreFailAlways {
+    type Bind = TrackedBind;
+
+    async fn bind(&self, registration: &Registration) -> Result<Self::Bind> {
+        self.inner.bind(registration).await
+    }
+
+    async fn next(&self, bind: &Self::Bind) -> Result<Observation> {
+        self.inner.next(bind).await
+    }
+
+    async fn cancel(&self, bind: &Self::Bind) -> Result<()> {
+        self.inner.cancel(bind).await
+    }
+
+    fn restore_ready(&self, bind: &Self::Bind, obs: Observation) -> Result<()> {
+        self.attempts
+            .lock()
+            .expect("attempts")
+            .push(bind.registration_id().as_str().to_string());
+        let _ = obs;
+        Err(ValidationError::new("/observer/restore_ready", "restore_failed").into())
+    }
+}
+
+#[tokio::test]
+async fn event_at_lease_restores_before_sink() {
+    let mut leased = registration("reg:sms-1", "sms_inbound", "sms:inbox-1");
+    leased.lease_expires_at = ts("2026-08-15T16:05:00Z");
+    let set = registration_set(vec![leased]);
+    let request = live_wait_request();
+    let script = Script {
+        buffer_limit: 8,
+        events: vec![wait_event(
+            "reg:sms-1",
+            "sms_inbound",
+            "evt:lease-1",
+            "2026-08-15T16:05:00Z",
+        )],
+    };
+    let clock = FakeClock::auto(request.created_at.clone());
+    let observer = ScriptedObserver::new(script, clock.clone());
+    let bursts = Arc::new(Mutex::new(Vec::new()));
+    let policy = CoalescePolicy::new(Duration::from_secs(10));
+    let err = run_coalesce(
+        &observer,
+        &clock,
+        &Cancel::new(),
+        &set,
+        &request,
+        &policy,
+        {
+            let bursts = bursts.clone();
+            move |burst| {
+                push_ids(&bursts, &burst);
+                async { Ok(()) }
+            }
+        },
+    )
+    .await
+    .expect_err("lease");
+    let err = lease_err(&err);
+    assert_eq!(err.reason, Some(NormativeReason::LeaseReauth));
+    assert!(ids(&bursts).is_empty());
+    assert_eq!(
+        observer
+            .queued_event_ids()
+            .get("reg:sms-1")
+            .map(Vec::as_slice),
+        Some(["evt:lease-1".to_string()].as_slice()),
+        "event at lease must be restored: {:?}",
+        observer.queued_event_ids()
+    );
+    assert_eq!(observer.live_bind_count(), 0);
+}
+
+#[tokio::test]
+async fn fault_at_lease_is_posture() {
+    let mut a = registration("reg:chanvoy-1", "chanvoy_wait", "chan:a");
+    let mut b = registration("reg:sms-1", "sms_inbound", "sms:inbox-1");
+    a.lease_expires_at = ts("2026-08-15T16:05:00Z");
+    b.lease_expires_at = ts("2026-08-15T16:05:00Z");
+    let set = registration_set(vec![a, b]);
+    let request = live_wait_request();
+    let at = "2026-08-15T16:05:00Z";
+    let script = Script {
+        buffer_limit: 8,
+        events: vec![
+            wait_event("reg:chanvoy-1", "chanvoy_wait", "evt:chanvoy-1", at),
+            wait_event("reg:sms-1", "sms_inbound", "evt:sms-1", at),
+        ],
+    };
+    let clock = FakeClock::auto(request.created_at.clone());
+    let inner = ScriptedObserver::new(script, clock.clone());
+    let observer = EventPlusError {
+        inner: inner.clone(),
+        fail: "reg:sms-1".to_string(),
+    };
+    let policy = CoalescePolicy::new(Duration::from_secs(10));
+    let err = run_coalesce(
+        &observer,
+        &clock,
+        &Cancel::new(),
+        &set,
+        &request,
+        &policy,
+        |_| async { Ok(()) },
+    )
+    .await
+    .expect_err("lease");
+    let err = lease_err(&err);
+    assert_eq!(err.reason, Some(NormativeReason::LeaseReauth));
+    assert_eq!(inner.live_bind_count(), 0);
+}
+
+#[tokio::test]
+async fn pending_and_harvested_same_arm_restore_fifo() {
+    let mut leased = registration("reg:sms-1", "sms_inbound", "sms:inbox-1");
+    leased.lease_expires_at = ts("2026-08-15T16:06:00Z");
+    let set = registration_set(vec![leased]);
+    let request = live_wait_request();
+    let script = Script {
+        buffer_limit: 8,
+        events: vec![
+            wait_event("reg:sms-1", "sms_inbound", "evt:1", "2026-08-15T16:05:00Z"),
+            wait_event("reg:sms-1", "sms_inbound", "evt:2", "2026-08-15T16:06:00Z"),
+        ],
+    };
+    let clock = FakeClock::auto(request.created_at.clone());
+    let observer = ScriptedObserver::new(script, clock.clone());
+    let policy = CoalescePolicy::new(Duration::from_secs(600));
+    let err = run_coalesce(
+        &observer,
+        &clock,
+        &Cancel::new(),
+        &set,
+        &request,
+        &policy,
+        |_| async { Ok(()) },
+    )
+    .await
+    .expect_err("lease");
+    let err = lease_err(&err);
+    assert_eq!(err.reason, Some(NormativeReason::LeaseReauth));
+    assert_eq!(
+        observer
+            .queued_event_ids()
+            .get("reg:sms-1")
+            .map(Vec::as_slice),
+        Some(["evt:1".to_string(), "evt:2".to_string()].as_slice()),
+        "FIFO A then B after restore: {:?}",
+        observer.queued_event_ids()
+    );
+    assert_eq!(observer.live_bind_count(), 0);
+}
+
+#[tokio::test]
+async fn restore_failure_attempts_every_observation() {
+    let mut a = registration("reg:chanvoy-1", "chanvoy_wait", "chan:a");
+    let mut b = registration("reg:sms-1", "sms_inbound", "sms:inbox-1");
+    a.lease_expires_at = ts("2026-08-15T16:05:00Z");
+    b.lease_expires_at = ts("2026-08-15T16:05:00Z");
+    let set = registration_set(vec![a, b]);
+    let request = live_wait_request();
+    let at = "2026-08-15T16:05:00Z";
+    let script = Script {
+        buffer_limit: 8,
+        events: vec![
+            wait_event("reg:chanvoy-1", "chanvoy_wait", "evt:chanvoy-1", at),
+            wait_event("reg:sms-1", "sms_inbound", "evt:sms-1", at),
+        ],
+    };
+    let clock = FakeClock::auto(request.created_at.clone());
+    let inner = ScriptedObserver::new(script, clock.clone());
+    let attempts = Arc::new(Mutex::new(Vec::new()));
+    let observer = RestoreFailAlways {
+        inner: inner.clone(),
+        attempts: attempts.clone(),
+    };
+    let policy = CoalescePolicy::new(Duration::from_secs(10));
+    let err = run_coalesce(
+        &observer,
+        &clock,
+        &Cancel::new(),
+        &set,
+        &request,
+        &policy,
+        |_| async { Ok(()) },
+    )
+    .await
+    .expect_err("restore");
+    assert!(err.to_string().contains("restore_failed"), "{err}");
+    assert_eq!(
+        attempts.lock().expect("attempts").len(),
+        2,
+        "must attempt every restore: {:?}",
+        attempts.lock().expect("attempts")
+    );
+    assert_eq!(inner.live_bind_count(), 0);
+}
+
+#[tokio::test]
+async fn idle_backoff_does_not_delay_quiet_flush() {
+    let set = registration_set(vec![
+        registration("reg:sms-1", "sms_inbound", "sms:inbox-1"),
+        registration("reg:idle-1", "sms_inbound", "sms:idle"),
+    ]);
+    let request = live_wait_request();
+    let script = Script {
+        buffer_limit: 8,
+        events: vec![wait_event(
+            "reg:sms-1",
+            "sms_inbound",
+            "evt:1",
+            "2026-08-15T16:05:00Z",
+        )],
+    };
+    let clock = FakeClock::auto(request.created_at.clone());
+    let inner = ScriptedObserver::new(script, clock.clone());
+    let observer = IdleAndScripted {
+        idle_id: "reg:idle-1".to_string(),
+        inner: inner.clone(),
+        idle: IdleObserver::new(),
+    };
+    let emit_at = Arc::new(Mutex::new(Vec::new()));
+    let policy = CoalescePolicy::new(Duration::from_secs(10));
+    let _end = run_coalesce(
+        &observer,
+        &clock,
+        &Cancel::new(),
+        &set,
+        &request,
+        &policy,
+        {
+            let emit_at = emit_at.clone();
+            let clock = clock.clone();
+            move |burst| {
+                emit_at
+                    .lock()
+                    .expect("times")
+                    .push(clock.current_time().as_str().to_string());
+                let _ = burst;
+                async { Ok(()) }
+            }
+        },
+    )
+    .await
+    .expect("coalesce");
+    assert_eq!(
+        emit_at.lock().expect("times").clone(),
+        vec!["2026-08-15T16:05:10Z".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn cancel_at_deadline_keeps_required_bind_pending() {
+    let set = registration_set(vec![
+        registration("reg:chanvoy-1", "chanvoy_wait", "chan:a"),
+        registration("reg:sms-1", "sms_inbound", "sms:inbox-1"),
+    ]);
+    let mut request = live_wait_request();
+    request.run_deadline = ts("2026-08-15T16:05:00Z");
+    let clock = FakeClock::auto(request.created_at.clone());
+    let observer = ScriptedObserver::new(Script::default(), clock.clone());
+    observer.hang_bind("reg:sms-1");
+    let cancel = Cancel::new();
+    let policy = CoalescePolicy::new(Duration::from_secs(10));
+    let (end, _) = tokio::join!(
+        run_coalesce(
+            &observer,
+            &clock,
+            &cancel,
+            &set,
+            &request,
+            &policy,
+            |_| async { Ok(()) },
+        ),
+        async {
+            while clock.current_time() < request.run_deadline {
+                tokio::task::yield_now().await;
+            }
+            cancel.trigger();
+        }
+    );
+    let end = end.expect("coalesce");
+    assert_eq!(
+        end,
+        FollowEnd::TerminalArm {
+            registration_id: waitprims_core::IdToken::new("reg:sms-1"),
+            kind: TerminalArmKind::Failed,
+            reason_code: waitprims_core::IdToken::new("required_bind_pending"),
+        }
     );
     assert_eq!(observer.live_bind_count(), 0);
 }

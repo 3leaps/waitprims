@@ -16,8 +16,8 @@ use waitprims_core::{
 use crate::cancel::Cancel;
 use crate::clock::Clock;
 use crate::follow::{
-    at_deadline, deadline_end, earliest_wake, finish_err, poll_once, posture_err, resolve,
-    sleep_backoff, CollectTurn, FollowEnd, SlotSet, TerminalArmKind, Turn,
+    at_deadline, backoff_deadline, deadline_end, earliest_wake, poll_once, posture_err, resolve,
+    CollectTurn, FollowEnd, SlotSet, TerminalArmKind, Turn,
 };
 use crate::observer::Observer;
 use crate::poll_cycle::event_surface_bytes;
@@ -147,9 +147,21 @@ fn fail_closed<O: Observer>(
 where
     O::Bind: 'static,
 {
-    let buffered = pending.take();
-    slots.restore_events(observer, buffered)?;
-    finish_err(observer, slots, err)
+    slots.restore_custody(observer, pending.take())?;
+    Err(err)
+}
+
+fn restore_then_overflow<O: Observer>(
+    observer: &O,
+    slots: &mut SlotSet<'_, O>,
+    unsunk: Vec<WaitEvent>,
+    registration_id: IdToken,
+) -> Result<FollowEnd>
+where
+    O::Bind: 'static,
+{
+    slots.restore_custody(observer, unsunk)?;
+    Ok(overflow_end(registration_id))
 }
 
 fn overflow_end(registration_id: IdToken) -> FollowEnd {
@@ -247,7 +259,20 @@ where
                     }
                     Ok(Turn::Idle) => {
                         backoff_step = backoff_step.saturating_add(1);
-                        sleep_backoff(clock, cancel, set, request, backoff_step).await;
+                        let mut sleep_to =
+                            backoff_deadline(clock, set, request, backoff_step);
+                        if !pending.is_empty() {
+                            if let Some(quiet) = next_quiet_emit_at.as_ref() {
+                                if quiet < &sleep_to {
+                                    sleep_to = quiet.clone();
+                                }
+                            }
+                        }
+                        tokio::select! {
+                            biased;
+                            _ = cancel.cancelled() => {}
+                            _ = clock.sleep_until(&sleep_to) => {}
+                        }
                         slots.rearm_idle();
                         poll_once(&mut slots).await;
                         slots.harvest_poll_ready(observer);
@@ -388,6 +413,9 @@ where
     S: FnMut(CoalesceBurst) -> Fut,
     Fut: Future<Output = Result<()>>,
 {
+    if let Some(err) = posture_err(set, request, now) {
+        return Some(fail_closed(observer, slots, pending, err));
+    }
     if let Some(err) = slots.fault.take() {
         return Some(fail_closed(observer, slots, pending, err));
     }
@@ -399,13 +427,15 @@ where
     if terminal.is_some() || cancelled || deadline {
         return Some(
             final_flush(
-                set, request, slots, now, pending, events, terminal, cancelled, on_burst,
+                observer, set, request, slots, now, pending, events, terminal, cancelled, on_burst,
             )
             .await,
         );
     }
 
     if let Some(done) = apply_turn(
+        observer,
+        slots,
         set,
         policy,
         now,
@@ -424,9 +454,10 @@ where
 
 #[allow(clippy::too_many_arguments)]
 async fn final_flush<O, S, Fut>(
+    observer: &O,
     set: &RegistrationSet,
     request: &LiveWaitRequest,
-    slots: &SlotSet<'_, O>,
+    slots: &mut SlotSet<'_, O>,
     now: &Timestamp,
     pending: &mut Pending,
     events: Vec<WaitEvent>,
@@ -440,10 +471,13 @@ where
     S: FnMut(CoalesceBurst) -> Fut,
     Fut: Future<Output = Result<()>>,
 {
-    for event in events {
-        if let Err(rid) = pending.try_push(set, event) {
-            pending.take();
-            return Ok(overflow_end(rid));
+    let mut rest = events.into_iter();
+    while let Some(event) = rest.next() {
+        if let Err(rid) = pending.try_push(set, event.clone()) {
+            let mut unsunk = pending.take();
+            unsunk.push(event);
+            unsunk.extend(rest);
+            return restore_then_overflow(observer, slots, unsunk, rid);
         }
     }
     if !pending.is_empty() {
@@ -453,17 +487,21 @@ where
     if let Some(end) = terminal {
         return Ok(end);
     }
+    if at_deadline(request, now) {
+        if let Some(end) = deadline_end(set, request, now, slots) {
+            return Ok(end);
+        }
+    }
     if cancelled {
         return Ok(FollowEnd::Cancel);
-    }
-    if let Some(end) = deadline_end(set, request, now, slots) {
-        return Ok(end);
     }
     Ok(FollowEnd::Deadline)
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn apply_turn<S, Fut>(
+async fn apply_turn<O, S, Fut>(
+    observer: &O,
+    slots: &mut SlotSet<'_, O>,
     set: &RegistrationSet,
     policy: &CoalescePolicy,
     now: &Timestamp,
@@ -473,6 +511,8 @@ async fn apply_turn<S, Fut>(
     on_burst: &mut S,
 ) -> Option<Result<FollowEnd>>
 where
+    O: Observer,
+    O::Bind: 'static,
     S: FnMut(CoalesceBurst) -> Fut,
     Fut: Future<Output = Result<()>>,
 {
@@ -496,10 +536,13 @@ where
         .any(|event| is_urgent(set, event, policy.urgent_at));
 
     if any_urgent && interval_due {
-        for event in events {
-            if let Err(rid) = pending.try_push(set, event) {
-                pending.take();
-                return Some(Ok(overflow_end(rid)));
+        let mut rest = events.into_iter();
+        while let Some(event) = rest.next() {
+            if let Err(rid) = pending.try_push(set, event.clone()) {
+                let mut unsunk = pending.take();
+                unsunk.push(event);
+                unsunk.extend(rest);
+                return Some(restore_then_overflow(observer, slots, unsunk, rid));
             }
         }
         return emit_quiet(now, policy, pending, next_quiet_emit_at, on_burst).await;
@@ -507,12 +550,16 @@ where
 
     if any_urgent {
         let mut urgent = Vec::new();
-        for event in events {
+        let mut rest = events.into_iter();
+        while let Some(event) = rest.next() {
             if is_urgent(set, &event, policy.urgent_at) {
                 urgent.push(event);
-            } else if let Err(rid) = pending.try_push(set, event) {
-                pending.take();
-                return Some(Ok(overflow_end(rid)));
+            } else if let Err(rid) = pending.try_push(set, event.clone()) {
+                let mut unsunk = pending.take();
+                unsunk.push(event);
+                unsunk.extend(urgent);
+                unsunk.extend(rest);
+                return Some(restore_then_overflow(observer, slots, unsunk, rid));
             } else if next_quiet_emit_at.is_none() {
                 *next_quiet_emit_at = Some(now.saturating_add(policy.min_emit_interval));
             }
@@ -526,10 +573,13 @@ where
         return None;
     }
 
-    for event in events {
-        if let Err(rid) = pending.try_push(set, event) {
-            pending.take();
-            return Some(Ok(overflow_end(rid)));
+    let mut rest = events.into_iter();
+    while let Some(event) = rest.next() {
+        if let Err(rid) = pending.try_push(set, event.clone()) {
+            let mut unsunk = pending.take();
+            unsunk.push(event);
+            unsunk.extend(rest);
+            return Some(restore_then_overflow(observer, slots, unsunk, rid));
         }
     }
     if next_quiet_emit_at.is_none() {

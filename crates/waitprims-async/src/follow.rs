@@ -294,7 +294,7 @@ where
     Some(FollowEnd::Deadline)
 }
 
-fn backoff_deadline<C: Clock>(
+pub(crate) fn backoff_deadline<C: Clock>(
     clock: &C,
     set: &RegistrationSet,
     request: &LiveWaitRequest,
@@ -505,15 +505,27 @@ where
             .position(|reg| reg.registration_id.as_str() == registration_id)
     }
 
-    /// Requeue consumed events onto their binds. FIFO is preserved by
-    /// restoring latest-first (`restore_ready` push-front).
-    pub(crate) fn restore_events(
-        &self,
+    /// Requeue unsunk custody. Harvested (newer) first, then pending
+    /// newest-first, so `restore_ready` push-front yields FIFO. Attempts
+    /// every restore and returns the first error.
+    pub(crate) fn restore_custody(
+        &mut self,
         observer: &O,
-        events: Vec<WaitEvent>,
+        pending: Vec<WaitEvent>,
     ) -> waitprims_core::Result<()> {
+        let harvested = self.drain_replayable();
         let mut first_err = None;
-        for event in events.into_iter().rev() {
+        for (idx, obs) in harvested {
+            let Some(bind) = self.binds[idx].as_ref() else {
+                continue;
+            };
+            if let Err(err) = observer.restore_ready(bind.as_ref(), obs) {
+                if first_err.is_none() {
+                    first_err = Some(err);
+                }
+            }
+        }
+        for event in pending.into_iter().rev() {
             let Some(idx) = self.index_of(event.registration_id.as_str()) else {
                 continue;
             };
@@ -668,7 +680,7 @@ where
         })
     }
 
-    fn drain_replayable(&mut self) -> Vec<(usize, Observation)> {
+    pub(crate) fn drain_replayable(&mut self) -> Vec<(usize, Observation)> {
         let mut out = Vec::new();
         for (idx, slot) in self.harvested.iter_mut().enumerate() {
             if let Some(obs) = slot.take() {
