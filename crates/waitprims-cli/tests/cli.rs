@@ -4,8 +4,8 @@ use std::process::{Command, Stdio};
 
 use waitprims_async::{run_first_match, run_poll_cycle, Cancel};
 use waitprims_core::{
-    bundled_entry_schema, bundled_message_schema, validate_message, validate_raw_documents,
-    AgentWaitMessage, MessageType,
+    bundled_entry_schema, bundled_message_schema, registration_digest, validate_message,
+    validate_raw_documents, AgentWaitMessage, MessageType, CAPABILITY, PINNED_CRUCIBLE_SHA,
 };
 use waitprims_testkit::{FakeClock, Script, ScriptedObserver};
 
@@ -19,6 +19,10 @@ fn vendor_root() -> PathBuf {
 
 fn fixture_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/initial-case")
+}
+
+fn follow_demo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/follow-demo")
 }
 
 fn workspace_root() -> PathBuf {
@@ -1036,4 +1040,294 @@ async fn library_poll_outcome(root: &Path) -> serde_json::Value {
     let json = serde_json::to_string(&message).expect("serialize");
     validate_message(&json).expect("library poll must admit");
     serde_json::from_str(&json).expect("library poll JSON")
+}
+
+fn follow_jsonl_records(stdout: &[u8]) -> Vec<serde_json::Value> {
+    String::from_utf8_lossy(stdout)
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(|line| serde_json::from_str(line).unwrap_or_else(|_| panic!("jsonl: {line}")))
+        .collect()
+}
+
+#[test]
+fn follow_help_shows_file_flags() {
+    let output = bin()
+        .args(["follow", "--help"])
+        .output()
+        .expect("follow --help");
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--registration-set"), "stdout={stdout}");
+    assert!(stdout.contains("--request"), "stdout={stdout}");
+    assert!(stdout.contains("--script"), "stdout={stdout}");
+    assert!(
+        !stdout.contains("--cancel"),
+        "follow --help must not offer --cancel"
+    );
+}
+
+#[test]
+fn follow_demo_matches_golden_jsonl() {
+    let root = follow_demo_root();
+    let output = bin()
+        .args([
+            "follow",
+            "--registration-set",
+            root.join("registration_set.json").to_str().unwrap(),
+            "--request",
+            root.join("live_wait_request.json").to_str().unwrap(),
+            "--script",
+            root.join("follow.json").to_str().unwrap(),
+        ])
+        .output()
+        .expect("run follow demo");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let expected = std::fs::read_to_string(root.join("golden.jsonl")).expect("golden");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        expected,
+        "follow stdout must match golden.jsonl"
+    );
+    let records = follow_jsonl_records(&output.stdout);
+    assert!(records.len() >= 3, "need ≥2 bursts plus end: {records:?}");
+    assert_eq!(records[0]["diagnostic_type"], "follow_burst");
+    assert_eq!(records[0]["sequence"], 1);
+    assert_eq!(records[0]["events"][0]["registration_id"], "reg:chanvoy-1");
+    assert_eq!(records[0]["events"][1]["registration_id"], "reg:sms-1");
+    assert_eq!(
+        records[0]["events"][0]["proposed_next_anchor"]["value"],
+        "anc:after-chanvoy-1"
+    );
+    assert_eq!(records[1]["diagnostic_type"], "follow_burst");
+    assert_eq!(records[1]["sequence"], 2);
+    let last = records.last().expect("end");
+    assert_eq!(last["diagnostic_type"], "follow_end");
+    assert_eq!(last["end_kind"], "deadline");
+    for record in &records {
+        assert!(record.get("message_type").is_none(), "{record}");
+        let line = serde_json::to_string(record).expect("line");
+        validate_message(&line).expect_err("diagnostic JSONL must fail wire admission");
+    }
+}
+
+#[test]
+fn follow_unknown_registration_is_zero_stdout() {
+    let root = follow_demo_root();
+    let script = serde_json::json!({
+        "events": [{
+            "event_id": "evt:secret-1",
+            "method_id": "sms_inbound",
+            "subject_kind": "inbox",
+            "subject_id": "inbox:sms-1",
+            "occurred_at": "2026-08-15T16:05:00Z",
+            "payload": {
+                "payload_ref": "msg:secret-payload-xyz",
+                "content_digest": {
+                    "algorithm": "sha256",
+                    "value": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+                }
+            },
+            "registration_id": "reg:unknown-1",
+            "source_instance_ref": "source:provider-a",
+            "observed_at": "2026-08-15T16:05:00Z",
+            "start_anchor": {"kind": "provider_opaque", "value": "anc:cursor-0"},
+            "proposed_next_anchor": {"kind": "provider_opaque", "value": "anc:after-1"},
+            "replay_status": "fresh",
+            "correlation_id": "corr:aw-follow-1"
+        }]
+    });
+    let script_path = write_temp_json("unknown-reg", script.to_string().as_bytes());
+    let output = bin()
+        .args([
+            "follow",
+            "--registration-set",
+            root.join("registration_set.json").to_str().unwrap(),
+            "--request",
+            root.join("live_wait_request.json").to_str().unwrap(),
+            "--script",
+            script_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("follow unknown registration");
+    let _ = std::fs::remove_file(&script_path);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        output.stdout.is_empty(),
+        "stdout={}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("unknown_registration"), "stderr={stderr}");
+    assert!(
+        !stderr.contains("msg:secret-payload-xyz"),
+        "stderr leaked payload: {stderr}"
+    );
+    assert!(
+        !String::from_utf8_lossy(&output.stdout).contains("msg:secret-payload-xyz"),
+        "stdout leaked payload"
+    );
+}
+
+#[test]
+fn follow_rejects_uri_without_leaking_hostname() {
+    let root = follow_demo_root();
+    let output = bin()
+        .args([
+            "follow",
+            "--registration-set",
+            root.join("registration_set.json").to_str().unwrap(),
+            "--request",
+            "https://example.invalid/live_wait_request.json",
+            "--script",
+            root.join("follow.json").to_str().unwrap(),
+        ])
+        .output()
+        .expect("follow uri request");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("example.invalid"),
+        "stderr leaked hostname: {stderr}"
+    );
+    assert!(
+        stderr.contains("local_path_required"),
+        "expected local_path_required: {stderr}"
+    );
+}
+
+#[test]
+fn follow_rejects_dash_script() {
+    let root = follow_demo_root();
+    let output = bin()
+        .args([
+            "follow",
+            "--registration-set",
+            root.join("registration_set.json").to_str().unwrap(),
+            "--request",
+            root.join("live_wait_request.json").to_str().unwrap(),
+            "--script",
+            "-",
+        ])
+        .output()
+        .expect("follow dash script");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("local_path_required"),
+        "expected local_path_required: {stderr}"
+    );
+}
+
+#[test]
+fn follow_admission_failure_is_zero_stdout() {
+    let root = follow_demo_root();
+    let output = bin()
+        .args([
+            "follow",
+            "--registration-set",
+            root.join("follow.json").to_str().unwrap(),
+            "--request",
+            root.join("live_wait_request.json").to_str().unwrap(),
+            "--script",
+            root.join("follow.json").to_str().unwrap(),
+        ])
+        .output()
+        .expect("follow bad set");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        output.stdout.is_empty(),
+        "stdout={}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+#[test]
+fn contract_prints_compiled_pin() {
+    let output = bin().arg("contract").output().expect("run contract");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("contract stdout JSON");
+    assert_eq!(value["diagnostic_type"], "contract");
+    assert_eq!(value["capability"], CAPABILITY);
+    assert_eq!(value["crucible_sha"], PINNED_CRUCIBLE_SHA);
+    assert_eq!(value["entry_schema"], "agent-wait-message.schema.json");
+    assert_eq!(
+        value["entry_schema_id"],
+        "contract:agent-wait/v0/agent-wait-message.schema.json"
+    );
+    let expected = std::fs::read_to_string(workspace_root().join("VERSION"))
+        .expect("VERSION")
+        .trim()
+        .to_string();
+    let version = value["version"].as_str().expect("version");
+    assert!(
+        version.starts_with(&expected),
+        "version={version} want prefix {expected}"
+    );
+    assert!(value.get("message_type").is_none());
+    validate_message(std::str::from_utf8(&output.stdout).expect("utf8").trim())
+        .expect_err("contract must fail wire admission");
+}
+
+#[test]
+fn follow_lease_error_after_burst_keeps_burst_and_skips_end() {
+    let root = follow_demo_root();
+    let mut set: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(root.join("registration_set.json")).expect("set"),
+    )
+    .expect("set json");
+    for reg in set["registrations"].as_array_mut().expect("regs") {
+        reg["lease_expires_at"] = serde_json::json!("2026-08-15T16:08:00Z");
+    }
+    let digest = registration_digest(&set["registrations"].to_string()).expect("digest");
+    set["registration_digest"]["value"] = serde_json::json!(digest);
+    let set_path = write_temp_json("short-lease-set", set.to_string().as_bytes());
+    let output = bin()
+        .args([
+            "follow",
+            "--registration-set",
+            set_path.to_str().unwrap(),
+            "--request",
+            root.join("live_wait_request.json").to_str().unwrap(),
+            "--script",
+            root.join("follow.json").to_str().unwrap(),
+        ])
+        .output()
+        .expect("follow short lease");
+    let _ = std::fs::remove_file(&set_path);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("\"diagnostic_type\":\"follow_burst\""),
+        "stdout={stdout}"
+    );
+    assert!(
+        !stdout.contains("follow_end"),
+        "must not fabricate follow_end: {stdout}"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("lease_reauth") || stderr.contains("lease"),
+        "stderr={stderr}"
+    );
 }

@@ -10,7 +10,7 @@
 #   make release-preflight Verify pre-tag requirements
 #   make release-check     Version consistency + cargo package (does not publish)
 
-.PHONY: all help check test fmt fmt-check lint build clean version
+.PHONY: all help check test fmt fmt-check lint build clean version demo-follow
 .PHONY: precommit prepush pr-final
 .PHONY: version-patch version-minor version-major version-set version-sync version-check
 .PHONY: release-check release-preflight release-guard-tag-version
@@ -58,6 +58,7 @@ help: ## Show available targets
 	@echo "  fmt-check       cargo fmt --all -- --check"
 	@echo "  lint            cargo clippy --workspace --all-targets -- -D warnings"
 	@echo "  build           cargo build --workspace"
+	@echo "  demo-follow     Offline held-follow CLI demo vs golden JSONL"
 	@echo "  clean           cargo clean"
 	@echo "  precommit       fmt-check, clippy"
 	@echo "  prepush         fmt-check, clippy, locked tests, version-check"
@@ -114,6 +115,15 @@ lint: ## Run clippy
 build: ## Build all crates (debug)
 	$(CARGO) build --workspace
 	@echo "[ok] Build complete"
+
+demo-follow: ## Offline held-follow CLI demo vs golden JSONL
+	$(CARGO) build -p waitprims-cli
+	./target/debug/waitprims follow \
+		--registration-set fixtures/follow-demo/registration_set.json \
+		--request fixtures/follow-demo/live_wait_request.json \
+		--script fixtures/follow-demo/follow.json \
+		| cmp - fixtures/follow-demo/golden.jsonl
+	@echo "[ok] demo-follow matched golden JSONL"
 
 clean: ## Remove build artifacts
 	$(CARGO) clean

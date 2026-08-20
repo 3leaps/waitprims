@@ -106,10 +106,18 @@ waitprims --version
 waitprims validate --input <file-or-directory>
 waitprims wait --registration-set <file> --request <file> --script <file>
 waitprims poll --registration-set <file> --request <file> --script <file>
+waitprims follow --registration-set <file> --request <file> --script <file>
+waitprims contract
 waitprims schema [--message-type <message_type>]
 ```
 
-`validate --input` admits one message file or a directory set. `wait` resolves a cited registration set and first-matches a scripted observer. `poll` runs one bounded poll-cycle over the same set. `schema` prints the bundled JSON Schema (`$id` and document); `--message-type` prints that kind's definition without minting a fragment `$id`. JSON goes to stdout. Logs and errors go to stderr. Scripts are local files; `--script -` is rejected.
+`validate --input` admits one message file or a directory set. `wait` resolves a cited registration set and first-matches a scripted observer. `poll` runs one bounded poll-cycle over the same set. `follow` binds once and streams diagnostic JSONL bursts until a runtime end. `contract` prints the compiled capability pin. `schema` prints the bundled JSON Schema (`$id` and document); `--message-type` prints that kind's definition without minting a fragment `$id`. JSON goes to stdout. Logs and errors go to stderr. Scripts are local files; `--script -` is rejected.
+
+Install the diagnostic binary from this tree (it is not on crates.io):
+
+```bash
+cargo install --path crates/waitprims-cli --locked --force
+```
 
 ## License
 
