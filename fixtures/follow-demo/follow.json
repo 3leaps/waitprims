@@ -1,0 +1,85 @@
+{
+  "events": [
+    {
+      "event_id": "evt:sms-1",
+      "method_id": "sms_inbound",
+      "subject_kind": "inbox",
+      "subject_id": "inbox:sms-1",
+      "occurred_at": "2026-08-15T16:05:00Z",
+      "payload": {
+        "payload_ref": "msg:sms-payload-1",
+        "content_digest": {
+          "algorithm": "sha256",
+          "value": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        }
+      },
+      "registration_id": "reg:sms-1",
+      "source_instance_ref": "source:provider-a",
+      "observed_at": "2026-08-15T16:05:00Z",
+      "start_anchor": {
+        "kind": "provider_opaque",
+        "value": "anc:cursor-0"
+      },
+      "proposed_next_anchor": {
+        "kind": "provider_opaque",
+        "value": "anc:after-sms-1"
+      },
+      "replay_status": "fresh",
+      "correlation_id": "corr:aw-follow-1"
+    },
+    {
+      "event_id": "evt:chanvoy-1",
+      "method_id": "chanvoy_wait",
+      "subject_kind": "inbox",
+      "subject_id": "inbox:seat-a",
+      "occurred_at": "2026-08-15T16:05:00Z",
+      "payload": {
+        "payload_ref": "msg:chanvoy-payload-1",
+        "content_digest": {
+          "algorithm": "sha256",
+          "value": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        }
+      },
+      "registration_id": "reg:chanvoy-1",
+      "source_instance_ref": "source:provider-a",
+      "observed_at": "2026-08-15T16:05:00Z",
+      "start_anchor": {
+        "kind": "provider_opaque",
+        "value": "anc:cursor-0"
+      },
+      "proposed_next_anchor": {
+        "kind": "provider_opaque",
+        "value": "anc:after-chanvoy-1"
+      },
+      "replay_status": "fresh",
+      "correlation_id": "corr:aw-follow-1"
+    },
+    {
+      "event_id": "evt:sms-2",
+      "method_id": "sms_inbound",
+      "subject_kind": "inbox",
+      "subject_id": "inbox:sms-1",
+      "occurred_at": "2026-08-15T16:10:00Z",
+      "payload": {
+        "payload_ref": "msg:sms-payload-2",
+        "content_digest": {
+          "algorithm": "sha256",
+          "value": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        }
+      },
+      "registration_id": "reg:sms-1",
+      "source_instance_ref": "source:provider-a",
+      "observed_at": "2026-08-15T16:10:00Z",
+      "start_anchor": {
+        "kind": "provider_opaque",
+        "value": "anc:after-sms-1"
+      },
+      "proposed_next_anchor": {
+        "kind": "provider_opaque",
+        "value": "anc:after-sms-2"
+      },
+      "replay_status": "fresh",
+      "correlation_id": "corr:aw-follow-1"
+    }
+  ]
+}

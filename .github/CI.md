@@ -9,7 +9,7 @@ native smokes, not five.
 
 | Job | When | Role |
 | --- | --- | --- |
-| `fast` | every push/PR | fmt, clippy `-D warnings`, actionlint, `cargo test --workspace --locked`, MSRV 1.88.0 |
+| `fast` | every push/PR | fmt, clippy `-D warnings`, actionlint, `cargo test --workspace --locked`, `make demo-follow`, MSRV 1.88.0 |
 | `platform-smoke-hosted` | every push/PR | three native cells; clippy + locked tests; `fail-fast: false` |
 | `platform-smoke-arm64` | same-repo only | two native cells; clippy + locked tests; `fail-fast: false`; not a required gate |
 

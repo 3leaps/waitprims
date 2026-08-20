@@ -8,9 +8,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+mod diagnostic;
+
 use clap::{Parser, Subcommand, ValueEnum};
 use tracing::info;
-use waitprims_async::{run_first_match, run_poll_cycle, Cancel};
+use waitprims_async::{run_first_match, run_follow, run_poll_cycle, Cancel};
 use waitprims_core::{
     bundled_entry_schema, bundled_message_schema, validate_message, validate_raw_documents,
     AgentWaitMessage, Error, LiveWaitRequest, MessageType, PollCycleRequest, RegistrationSet,
@@ -69,6 +71,20 @@ enum Command {
         #[arg(long, value_name = "PATH")]
         script: PathBuf,
     },
+    /// Replay a scripted held-follow session.
+    Follow {
+        /// Admitted `registration_set` JSON file.
+        #[arg(long, value_name = "PATH")]
+        registration_set: PathBuf,
+        /// Admitted `live_wait_request` JSON file.
+        #[arg(long, value_name = "PATH")]
+        request: PathBuf,
+        /// Local scripted events JSON file.
+        #[arg(long, value_name = "PATH")]
+        script: PathBuf,
+    },
+    /// Print the compiled contract pin.
+    Contract,
     /// Print the bundled JSON Schema, or one message kind's definition.
     Schema {
         /// Restrict output to one of the six `message_type` values.
@@ -171,6 +187,24 @@ Diagnostic CLI. The library is the product; there is no daemon.",
                 ExitCode::from(1)
             }
         },
+        Some(Command::Follow {
+            registration_set,
+            request,
+            script,
+        }) => match run_held_follow(&registration_set, &request, &script) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("waitprims follow: {err}");
+                ExitCode::from(1)
+            }
+        },
+        Some(Command::Contract) => match print_contract() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("waitprims contract: {err}");
+                ExitCode::from(1)
+            }
+        },
     }
 }
 
@@ -258,6 +292,61 @@ fn run_poll(set_path: &Path, request_path: &Path, script_path: &Path) -> Result<
         validate_message(&json)?;
         Ok(json)
     })
+}
+
+fn run_held_follow(set_path: &Path, request_path: &Path, script_path: &Path) -> Result<(), Error> {
+    reject_non_local_path(set_path)?;
+    reject_non_local_path(request_path)?;
+    reject_non_local_path(script_path)?;
+    let set_raw = read_raw(set_path)?;
+    let request_raw = read_raw(request_path)?;
+    let admitted = validate_raw_documents([&set_raw, &request_raw])?;
+    let (set, request) = take_set_and_request(admitted)?;
+    let script_raw = read_raw(script_path)?;
+    let script = Script::from_json(&script_raw)?;
+    reject_unknown_registrations(&set, &script)?;
+    info!("running scripted follow");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .map_err(|_| Error::Contract {
+            path: "runtime",
+            constraint: "init",
+        })?;
+    let mut sink = diagnostic::JsonlSink::new(std::io::stdout());
+    let end = runtime.block_on(async {
+        let clock = FakeClock::auto(request.created_at.clone());
+        let observer = ScriptedObserver::new(script, clock.clone());
+        let cancel = Cancel::new();
+        run_follow(&observer, &clock, &cancel, &set, &request, |burst| {
+            let result = sink.emit_burst(&burst);
+            async move { result }
+        })
+        .await
+    })?;
+    sink.emit_end(&end)?;
+    Ok(())
+}
+
+fn print_contract() -> Result<(), Error> {
+    let json = diagnostic::contract_json()?;
+    println!("{json}");
+    Ok(())
+}
+
+fn reject_unknown_registrations(set: &RegistrationSet, script: &Script) -> Result<(), Error> {
+    for event in &script.events {
+        if !set
+            .registrations
+            .iter()
+            .any(|reg| reg.registration_id.as_str() == event.registration_id.as_str())
+        {
+            return Err(
+                ValidationError::new("/events/registration_id", "unknown_registration").into(),
+            );
+        }
+    }
+    Ok(())
 }
 
 fn take_set_and_poll_request(
