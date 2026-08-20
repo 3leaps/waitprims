@@ -58,7 +58,7 @@ help: ## Show available targets
 	@echo "  fmt-check       cargo fmt --all -- --check"
 	@echo "  lint            cargo clippy --workspace --all-targets -- -D warnings"
 	@echo "  build           cargo build --workspace"
-	@echo "  demo-follow     Offline held-follow CLI demo vs golden JSONL"
+	@echo "  demo-follow     Locked offline held-follow CLI demo vs golden JSONL"
 	@echo "  clean           cargo clean"
 	@echo "  precommit       fmt-check, clippy"
 	@echo "  prepush         fmt-check, clippy, locked tests, version-check"
@@ -116,9 +116,9 @@ build: ## Build all crates (debug)
 	$(CARGO) build --workspace
 	@echo "[ok] Build complete"
 
-demo-follow: ## Offline held-follow CLI demo vs golden JSONL
-	$(CARGO) build -p waitprims-cli
-	./target/debug/waitprims follow \
+demo-follow: ## Locked offline held-follow CLI demo vs golden JSONL
+	$(CARGO) build --locked --offline -p waitprims-cli
+	./target/debug/waitprims --log-level error follow \
 		--registration-set fixtures/follow-demo/registration_set.json \
 		--request fixtures/follow-demo/live_wait_request.json \
 		--script fixtures/follow-demo/follow.json \
@@ -135,7 +135,7 @@ precommit: fmt-check lint ## Fast checks for every commit
 prepush: fmt-check lint test version-check ## Thorough checks before push
 	@echo "[ok] Pre-push checks passed"
 
-pr-final: prepush ## Final PR merge-readiness gate
+pr-final: prepush demo-follow ## Final PR merge-readiness gate
 	@echo "[ok] PR final checks passed"
 
 # -----------------------------------------------------------------------------

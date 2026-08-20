@@ -76,8 +76,13 @@ waitprims-testkit = "0.1"
 ```
 
 Until the crates are on the registry, pin a git tag. The CLI is
-diagnostic only. Build it from this tree (`cargo build -p waitprims-cli`)
-or:
+diagnostic only. From the repository root, build it:
+
+```bash
+cargo build --locked -p waitprims-cli
+```
+
+The binary is `./target/debug/waitprims`. Or install it:
 
 ```bash
 cargo install --path crates/waitprims-cli --locked --force
@@ -85,8 +90,20 @@ cargo install --path crates/waitprims-cli --locked --force
 
 It is not a crates.io package. `waitprims follow` streams diagnostic
 JSONL (`diagnostic_type`, not `message_type`) for the held-follow
-runner. `waitprims contract` prints the compiled pin. `make demo-follow`
-runs the offline multi-burst fixture.
+runner. `waitprims contract` prints the compiled pin.
+
+Canonical held-follow demo (repository root; after a locked fetch or
+build so the cargo cache is present):
+
+```bash
+make demo-follow
+```
+
+That builds with `cargo build --locked --offline -p waitprims-cli` and
+compares stdout to
+[`fixtures/follow-demo/golden.jsonl`](../fixtures/follow-demo/golden.jsonl).
+See [`fixtures/follow-demo/README.md`](../fixtures/follow-demo/README.md)
+for the copyable three-file command.
 
 docs.rs pages appear after the first crates.io upload:
 [waitprims-core](https://docs.rs/waitprims-core),

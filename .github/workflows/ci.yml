@@ -77,6 +77,9 @@ jobs:
       - name: Test
         run: cargo test --workspace --locked
 
+      - name: Held-follow demo
+        run: make demo-follow
+
   platform-smoke-hosted:
     name: platform-smoke-hosted (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}

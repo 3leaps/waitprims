@@ -1072,6 +1072,8 @@ fn follow_demo_matches_golden_jsonl() {
     let root = follow_demo_root();
     let output = bin()
         .args([
+            "--log-level",
+            "error",
             "follow",
             "--registration-set",
             root.join("registration_set.json").to_str().unwrap(),
@@ -1087,6 +1089,11 @@ fn follow_demo_matches_golden_jsonl() {
         Some(0),
         "stdout={} stderr={}",
         String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "stderr must be empty at --log-level error: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     let expected = std::fs::read_to_string(root.join("golden.jsonl")).expect("golden");
@@ -1247,6 +1254,11 @@ fn follow_admission_failure_is_zero_stdout() {
         output.stdout.is_empty(),
         "stdout={}",
         String::from_utf8_lossy(&output.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("waitprims follow:"),
+        "expected waitprims follow: prefix: {stderr}"
     );
 }
 

@@ -85,14 +85,14 @@ cargo build -p waitprims-cli
 
 The required CI gate is `fast` on `ubuntu-latest` (`cargo fmt --check`,
 `cargo clippy --workspace --all-targets -- -D warnings`, actionlint,
-`cargo test --workspace --locked`, MSRV 1.88.0). Hosted smokes are three
+`cargo test --workspace --locked`, `make demo-follow`, MSRV 1.88.0). Hosted smokes are three
 cells (linux-x64, macos-arm64, windows-x64) on every push/PR. arm64 labs
 (linux-arm64, windows-arm64) are same-repo only and are not a required
 gate. Fork PRs do not run the arm64 cells. See
 [`.github/CI.md`](.github/CI.md) and [`docs/README.md`](docs/README.md).
 
-`make precommit` is fmt-check and clippy. `make prepush` and
-`make pr-final` add locked tests and version-check.
+`make precommit` is fmt-check and clippy. `make prepush` adds locked
+tests and version-check. `make pr-final` also runs `make demo-follow`.
 `make release-check` packages the workspace (`cargo package --workspace`)
 and publishes none. Only the three library crates are publishable.
 See [`RELEASE_CHECKLIST.md`](RELEASE_CHECKLIST.md) for the later signed
