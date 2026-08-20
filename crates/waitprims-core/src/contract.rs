@@ -17,7 +17,7 @@ use crate::types::MessageType;
 pub const CAPABILITY: &str = "contract: agent-wait/v0";
 
 /// Crucible commit this tree vendors.
-pub const PINNED_CRUCIBLE_SHA: &str = "f1912957cde19b2b1e7809e430cc28dc417287cc";
+pub const PINNED_CRUCIBLE_SHA: &str = "4bc95146bc4ed503180fb13971947854a36957cb";
 
 // Crate-local copies so `cargo package` can verify without the workspace
 // tree. Tests assert these match `schemas/v0`.

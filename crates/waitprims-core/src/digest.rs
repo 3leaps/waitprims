@@ -95,6 +95,54 @@ mod tests {
     }
 
     #[test]
+    fn omitted_priority_digest_differs_from_explicit_50() {
+        let omitted = r#"[{
+            "registration_id": "reg:job-complete-1",
+            "method_id": "job_complete",
+            "subject_kind": "service_job",
+            "subject_id": "job:transcribe-1",
+            "baseline_policy": "latest",
+            "required": true,
+            "source_instance_ref": "source:provider-a",
+            "predicate_ref": "pred:job-complete",
+            "capability_ref": "cap:wait",
+            "lease_expires_at": "2026-08-16T00:00:00Z",
+            "bounds": {
+                "max_events": 50,
+                "max_bytes": 524288
+            }
+        }]"#;
+        let explicit_50 = r#"[{
+            "registration_id": "reg:job-complete-1",
+            "method_id": "job_complete",
+            "subject_kind": "service_job",
+            "subject_id": "job:transcribe-1",
+            "baseline_policy": "latest",
+            "required": true,
+            "source_instance_ref": "source:provider-a",
+            "predicate_ref": "pred:job-complete",
+            "capability_ref": "cap:wait",
+            "lease_expires_at": "2026-08-16T00:00:00Z",
+            "bounds": {
+                "max_events": 50,
+                "max_bytes": 524288
+            },
+            "priority": 50
+        }]"#;
+        let omit = registration_digest(omitted).unwrap();
+        let explicit = registration_digest(explicit_50).unwrap();
+        assert_ne!(omit, explicit);
+        assert_eq!(
+            omit,
+            "cb5c843991542fca328ea9916d810e601f83429a496bd94986a1e7b5cfbeb7c1"
+        );
+        assert_eq!(
+            explicit,
+            "64c5e57bafbfd792d289fa9ccf0bfdca3b643319165ddb23de9602814ab4cdcd"
+        );
+    }
+
+    #[test]
     fn registration_digest_rejects_duplicate_keys_in_raw_array() {
         let err = registration_digest(r#"[{"a":1,"a":2}]"#).unwrap_err();
         assert!(matches!(err, JcsError::DuplicateKey));

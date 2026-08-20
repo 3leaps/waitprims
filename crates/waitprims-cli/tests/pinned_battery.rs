@@ -87,8 +87,8 @@ fn validate_every_pinned_accept_exits_zero() {
     let files = json_files(&examples);
     assert_eq!(
         files.len(),
-        26,
-        "pinned accept corpus must stay 26 examples"
+        30,
+        "pinned accept corpus must stay 30 examples"
     );
     for path in files {
         assert_validate_ok(&path);
@@ -110,8 +110,8 @@ fn validate_every_schema_reject_grouping() {
             assert_validate_ok(&path);
         }
     }
-    assert_eq!(rejects, 14, "schema reject files");
-    assert_eq!(baselines, 14, "schema baseline twins");
+    assert_eq!(rejects, 18, "schema reject files");
+    assert_eq!(baselines, 18, "schema baseline twins");
 }
 
 #[test]
@@ -163,7 +163,7 @@ fn pinned_reject_tree_is_the_full_corpus() {
     let files = json_files(&vendor_root().join("rejects"));
     assert_eq!(
         files.len(),
-        100,
-        "library reject corpus is 100 JSON files; CLI must visit the same tree"
+        108,
+        "library reject corpus is 108 JSON files; CLI must visit the same tree"
     );
 }

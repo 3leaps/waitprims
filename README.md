@@ -72,7 +72,7 @@ waitprims-testkit = "0.1"
 Until then, pin a git tag. The diagnostic CLI is not published. APIs
 may still move. See [docs/README.md](docs/README.md#install).
 
-Pinned `contract: agent-wait/v0` at Crucible `f1912957cde19b2b1e7809e430cc28dc417287cc`. See [`schemas/v0/PIN.md`](schemas/v0/PIN.md).
+Pinned `contract: agent-wait/v0` at Crucible `4bc95146bc4ed503180fb13971947854a36957cb` (`v0.1.28`). Optional `registration.priority` is a presentation hint, not authorization. See [`schemas/v0/PIN.md`](schemas/v0/PIN.md).
 
 `validate_message` and `validate_raw_documents` are the only contract-admission path. `serde_json::from_str` on public message types is not admission.
 

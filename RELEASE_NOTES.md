@@ -8,6 +8,13 @@
 
 ---
 
+## v0.2.0 — unreleased
+
+Local cut. Source-breaking optional `registration.priority` (inert).
+Not a 0.1.x patch. Presentation hint, not authorization. No public tag yet.
+
+---
+
 ## v0.1.3 — 2026-08-18
 
 First crates.io cut for the library crates. No library API change

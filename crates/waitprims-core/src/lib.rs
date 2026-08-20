@@ -39,5 +39,6 @@ pub use types::{
     ContentDigest, CoverageArm, DigestAlgorithm, JcsDigest, LiveWaitOutcome, LiveWaitRequest,
     MessageType, OutcomeKind, PayloadRef, PollBound, PollCycleAck, PollCycleOutcome,
     PollCycleRequest, Registration, RegistrationSet, ReplayStatus, WaitBound, WaitEvent,
+    PRIORITY_BACKGROUND, PRIORITY_NORMAL, PRIORITY_URGENT,
 };
 pub use validate::{validate_message, validate_raw_documents, AdmittedMessage};

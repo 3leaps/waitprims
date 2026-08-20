@@ -3,12 +3,14 @@
 | Field | Value |
 | ----- | ----- |
 | Capability | `contract: agent-wait/v0` |
-| Crucible commit | `f1912957cde19b2b1e7809e430cc28dc417287cc` |
-| Date | 2026-08-15 |
-| Release | crucible release not yet cut |
+| Crucible commit | `4bc95146bc4ed503180fb13971947854a36957cb` |
+| Date | 2026-08-20 |
+| Release | crucible `v0.1.28` |
 
-The v0.1.26 pack exists on crucible `main`, but waitprims still pins the
-contract SHA (`feat(contracts): add agent-wait and service-job v0 (#20)`).
+Optional `registration.priority` (`0..=255`) is a cooperative
+presentation hint only. It is not authorization, grant, quota, or abort.
+Omitted reads as `50` at runner read time. Do not rewrite omitted to `50`
+before RFC 8785 digest. `required` remains coverage, not urgency.
 
 Consumers resolve the capability through `contract.json`: verify
 `capability`, then load the relative `entry_schema`. The schema `$id` is

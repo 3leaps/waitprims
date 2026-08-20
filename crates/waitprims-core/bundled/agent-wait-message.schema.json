@@ -266,7 +266,13 @@
         "lease_expires_at": { "$ref": "#/$defs/rfc3339" },
         "bounds": { "$ref": "#/$defs/waitBound" },
         "start_anchor": { "$ref": "#/$defs/anchor" },
-        "baseline_policy": { "$ref": "#/$defs/baselinePolicy" }
+        "baseline_policy": { "$ref": "#/$defs/baselinePolicy" },
+        "priority": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255,
+          "description": "Cooperative presentation hint only. Higher values express greater presentation urgency. Not authorization, grant, quota, or abort. Omitted reads as 50. Do not rewrite omitted to 50 before digest. Does not relax or override required, coverage/fairness, bounds, deadlines, lease/authn, or ack/retention behavior."
+        }
       },
       "oneOf": [
         {

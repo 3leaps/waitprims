@@ -66,6 +66,7 @@ pub fn registration(registration_id: &str, method_id: &str, subject_id: &str) ->
             value: IdToken::new("anc:cursor-0"),
         }),
         baseline_policy: None,
+        priority: None,
     }
 }
 
@@ -91,7 +92,14 @@ pub fn registration_baseline(
         },
         start_anchor: None,
         baseline_policy: Some(BaselinePolicy::Latest),
+        priority: None,
     }
+}
+
+/// Set a registration's optional wire `priority`.
+pub fn with_priority(mut registration: Registration, priority: u8) -> Registration {
+    registration.priority = Some(priority);
+    registration
 }
 
 /// Arm id assigned to a registration in poll-cycle fixtures.

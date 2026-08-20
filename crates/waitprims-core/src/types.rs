@@ -179,7 +179,19 @@ pub struct Registration {
     /// Explicit start-position policy. XOR with `start_anchor`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub baseline_policy: Option<BaselinePolicy>,
+    /// Cooperative presentation hint (`0..=255`). Omitted reads as
+    /// [`PRIORITY_NORMAL`] (50). Not authorization, grant, quota, or abort.
+    /// Do not rewrite omitted to 50 before digest.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub priority: Option<u8>,
 }
+
+/// Alias: always subject to a coalesce quiet window.
+pub const PRIORITY_BACKGROUND: u8 = 0;
+/// Alias: default read value when `priority` is omitted.
+pub const PRIORITY_NORMAL: u8 = 50;
+/// Alias: default `CoalescePolicy.urgent_at` threshold.
+pub const PRIORITY_URGENT: u8 = 100;
 
 /// `live_wait_request` body.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

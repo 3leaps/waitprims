@@ -23,7 +23,9 @@ Admission is `validate_message` / `validate_raw_documents` only.
 ## Crucible pin
 
 `contract: agent-wait/v0` at
-`f1912957cde19b2b1e7809e430cc28dc417287cc`.
+`4bc95146bc4ed503180fb13971947854a36957cb` (crucible `v0.1.28`).
+Optional `registration.priority` is a cooperative presentation hint,
+not authorization, grant, quota, or abort.
 
 See [`schemas/v0/PIN.md`](../schemas/v0/PIN.md). The vendored
 `contract.json` plus `agent-wait-message.schema.json` are the L2 entry.
@@ -41,6 +43,7 @@ than Unix 1ms; contract timestamps stay distinct.
 `run_follow` binds once per registration and emits runtime-only
 `FollowBurst` values until `FollowEnd` (cancel, deadline, or a
 fail-closed arm). It is not a seventh `agent-wait/v0` kind.
+`run_follow` does not read `priority`.
 
 ## Portable cancel
 
