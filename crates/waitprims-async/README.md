@@ -1,6 +1,6 @@
 # waitprims-async
 
-Async first-match, poll-cycle, and held-follow runners for waitprims.
+Async first-match, poll-cycle, held-follow, and coalesce runners for waitprims.
 
 Tokio is used for runtime, time, and synchronization only. This crate
 does not open network sockets and is not a daemon.

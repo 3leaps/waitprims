@@ -8,6 +8,13 @@
 
 ---
 
+## v0.2.1 — unreleased
+
+Adds `run_coalesce` on the unreleased 0.2.0 inert-priority pin.
+Not a 0.1.x patch. No public tag yet.
+
+---
+
 ## v0.2.0 — unreleased
 
 Local cut. Source-breaking optional `registration.priority` (inert).

@@ -45,6 +45,12 @@ than Unix 1ms; contract timestamps stay distinct.
 fail-closed arm). It is not a seventh `agent-wait/v0` kind.
 `run_follow` does not read `priority`.
 
+`run_coalesce` is a second held-session runner on the same binds. It
+emits runtime-only `CoalesceBurst` values under `CoalescePolicy`
+(`min_emit_interval`, `urgent_at`). Quiet events wait for the timer;
+`priority >= urgent_at` (omitted = 50) flushes immediately. `FollowEnd`
+is reused. `priority` is not authorization.
+
 ## Portable cancel
 
 `Cancel` is a cloneable watch token. Deadlines use `Clock`, not `EINTR`,

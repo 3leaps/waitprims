@@ -17,19 +17,22 @@ mod seam;
 pub use bind::{exclusive_head_anchor, resolve_start_at_bind, BindTracker, TrackedBind};
 pub use case::{
     ack_poll_outcome, arm_id_for, live_wait_request, poll_cycle_request, registration,
-    registration_baseline, registration_set, ts, wait_event,
+    registration_baseline, registration_set, ts, wait_event, with_priority,
 };
 pub use clock::FakeClock;
 pub use observer::{EndlessReadyObserver, IdleObserver, ScriptedObserver};
 pub use script::Script;
 pub use seam::ScriptedReceipts;
 pub use waitprims_async::{
-    event_surface_bytes, run_follow, run_poll_cycle, BindHandle, Cancel, Clock, Error, FollowBurst,
-    FollowEnd, Observation, Observer, Result, TerminalArmKind, POLL_ACK_RETENTION, TIE_RULE,
+    event_surface_bytes, run_coalesce, run_follow, run_poll_cycle, BindHandle, Cancel, Clock,
+    CoalesceBurst, CoalescePolicy, Error, FollowBurst, FollowEnd, Observation, Observer, Result,
+    TerminalArmKind, POLL_ACK_RETENTION, TIE_RULE,
 };
 
 #[cfg(test)]
 mod care_proofs;
+#[cfg(test)]
+mod coalesce_proofs;
 #[cfg(test)]
 mod follow_proofs;
 #[cfg(test)]

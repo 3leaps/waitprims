@@ -12,6 +12,15 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.2.1]
+
+Unreleased local cut. Adds `run_coalesce` on the 0.2.0 inert-priority pin.
+Not a `0.1.x` patch.
+
+- `run_coalesce` with runtime-only `CoalescePolicy` / `CoalesceBurst`;
+  quiet cadence is clock time at first quiet arrival, then
+  `emit + min_emit_interval`
+
 ## [0.2.0]
 
 Unreleased local cut. Source-breaking optional `registration.priority`
@@ -88,7 +97,8 @@ APIs may still move.
 - CI matrix already on main (`fast` plus hosted smokes; arm64 labs
   same-repo only)
 
-[Unreleased]: https://github.com/3leaps/waitprims/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/3leaps/waitprims/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/3leaps/waitprims/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/3leaps/waitprims/compare/v0.1.3...HEAD
 [0.1.3]: https://github.com/3leaps/waitprims/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/3leaps/waitprims/compare/v0.1.1...v0.1.2
