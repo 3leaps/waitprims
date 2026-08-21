@@ -8,6 +8,20 @@
 
 ---
 
+## v0.2.1 — unreleased
+
+Adds `run_coalesce` on the unreleased 0.2.0 inert-priority pin.
+Not a 0.1.x patch. No public tag yet.
+
+---
+
+## v0.2.0 — unreleased
+
+Local cut. Source-breaking optional `registration.priority` (inert).
+Not a 0.1.x patch. Presentation hint, not authorization. No public tag yet.
+
+---
+
 ## v0.1.3 — 2026-08-18
 
 First crates.io cut for the library crates. No library API change

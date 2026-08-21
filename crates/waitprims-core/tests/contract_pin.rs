@@ -15,7 +15,7 @@ fn filesystem_pin_matches_bundled_capability() {
     assert_eq!(resolved.entry_schema_name, "agent-wait-message.schema.json");
     assert_eq!(
         PINNED_CRUCIBLE_SHA,
-        "f1912957cde19b2b1e7809e430cc28dc417287cc"
+        "4bc95146bc4ed503180fb13971947854a36957cb"
     );
 }
 
@@ -49,7 +49,37 @@ fn missing_entry_schema_fails_closed() {
 fn pin_md_records_sha_and_uncut_release() {
     let pin = fs::read_to_string(vendor_root().join("PIN.md")).expect("PIN.md");
     assert!(pin.contains(PINNED_CRUCIBLE_SHA));
-    assert!(pin.contains("2026-08-15"));
-    assert!(pin.contains("crucible release not yet cut"));
+    assert!(pin.contains("2026-08-20"));
+    assert!(pin.contains("v0.1.28"));
+    assert!(pin.contains("not authorization"));
     assert!(!pin.contains("service-job/v0/contract.json"));
+}
+
+#[test]
+fn old_document_accepts_on_new_pin() {
+    let raw = fs::read_to_string(vendor_root().join("examples/registration_set.example.json"))
+        .expect("omitted-priority example");
+    assert!(
+        !raw.contains("\"priority\""),
+        "control example must omit priority"
+    );
+    waitprims_core::validate_message(&raw).expect("old doc / new pin");
+}
+
+#[test]
+fn new_document_rejects_on_old_pin_schema() {
+    let schema: serde_json::Value = serde_json::from_str(include_str!(
+        "support/agent-wait-message.schema.f191295.json"
+    ))
+    .expect("old pin schema");
+    let raw = fs::read_to_string(
+        vendor_root().join("examples/registration_set.priority-50.example.json"),
+    )
+    .expect("priority example");
+    let doc: serde_json::Value = serde_json::from_str(&raw).expect("priority example json");
+    let validator = jsonschema::validator_for(&schema).expect("compile old schema");
+    assert!(
+        !validator.is_valid(&doc),
+        "new-doc / old-pin must reject optional priority"
+    );
 }

@@ -2,9 +2,14 @@
 
 Vendored companion schemas for the portable agent-wait contract.
 
-This tree pins Crucible `f1912957cde19b2b1e7809e430cc28dc417287cc`.
-See [`PIN.md`](PIN.md). Do not invent a parallel schema here; interactions
-are the six `message_type` values in `agent-wait-message.schema.json`.
+This tree pins Crucible `4bc95146bc4ed503180fb13971947854a36957cb`
+(`v0.1.28`). See [`PIN.md`](PIN.md). Do not invent a parallel schema
+here; interactions are the six `message_type` values in
+`agent-wait-message.schema.json`.
+
+Registrations MAY carry optional `priority` (`0..=255`). It is a
+presentation hint, not authorization. Omitted documents remain valid
+and read as `50` without materializing that value before digest.
 
 These schemas provide the structural validation surface. Deadline ordering
 uses a fail-closed RFC3339 profile (no basic/week/ordinal dates, no
@@ -32,5 +37,5 @@ contract-entry mechanism.
 | -------------------------------- | ------------------------------------------------- |
 | `agent-wait-message.schema.json` | Discriminated entry schema (six `message_type`s). |
 | `contract.json`                  | Capability manifest and entry pointer.            |
-| `examples/`                      | One golden per kind, plus outcome-kind goldens.   |
+| `examples/`                      | One golden per kind, plus outcome-kind and priority goldens. |
 | `rejects/`                       | Schema-labeled and normative-labeled controls.    |

@@ -197,7 +197,7 @@ where
     outcome
 }
 
-fn resolve(set: &RegistrationSet, request: &LiveWaitRequest) -> Result<()> {
+pub(crate) fn resolve(set: &RegistrationSet, request: &LiveWaitRequest) -> Result<()> {
     if request.registration_set_ref.as_str() != set.message_id.as_str() {
         return Err(ValidationError::new("/registration_set_ref", "mismatch").into());
     }
@@ -210,7 +210,7 @@ fn resolve(set: &RegistrationSet, request: &LiveWaitRequest) -> Result<()> {
     Ok(())
 }
 
-fn posture_err(
+pub(crate) fn posture_err(
     set: &RegistrationSet,
     request: &LiveWaitRequest,
     now: &Timestamp,
@@ -257,7 +257,7 @@ fn earliest_lease(set: &RegistrationSet) -> Option<&Timestamp> {
         .min()
 }
 
-fn earliest_wake(set: &RegistrationSet, request: &LiveWaitRequest) -> Timestamp {
+pub(crate) fn earliest_wake(set: &RegistrationSet, request: &LiveWaitRequest) -> Timestamp {
     let deadline = earliest_deadline(request).clone();
     match earliest_lease(set) {
         Some(lease) if lease < &deadline => lease.clone(),
@@ -265,11 +265,11 @@ fn earliest_wake(set: &RegistrationSet, request: &LiveWaitRequest) -> Timestamp 
     }
 }
 
-fn at_deadline(request: &LiveWaitRequest, now: &Timestamp) -> bool {
+pub(crate) fn at_deadline(request: &LiveWaitRequest, now: &Timestamp) -> bool {
     now >= &request.logical_deadline || now >= &request.run_deadline
 }
 
-fn deadline_end<O: Observer>(
+pub(crate) fn deadline_end<O: Observer>(
     set: &RegistrationSet,
     request: &LiveWaitRequest,
     now: &Timestamp,
@@ -294,7 +294,7 @@ where
     Some(FollowEnd::Deadline)
 }
 
-fn backoff_deadline<C: Clock>(
+pub(crate) fn backoff_deadline<C: Clock>(
     clock: &C,
     set: &RegistrationSet,
     request: &LiveWaitRequest,
@@ -311,7 +311,7 @@ fn backoff_deadline<C: Clock>(
     }
 }
 
-async fn sleep_backoff<C: Clock>(
+pub(crate) async fn sleep_backoff<C: Clock>(
     clock: &C,
     cancel: &Cancel,
     set: &RegistrationSet,
@@ -394,7 +394,7 @@ where
     None
 }
 
-async fn poll_once<O: Observer>(slots: &mut SlotSet<'_, O>)
+pub(crate) async fn poll_once<O: Observer>(slots: &mut SlotSet<'_, O>)
 where
     O::Bind: 'static,
 {
@@ -414,7 +414,10 @@ where
     Once { slots }.await;
 }
 
-fn finish_cancel<O: Observer>(observer: &O, slots: &mut SlotSet<'_, O>) -> Result<FollowEnd>
+pub(crate) fn finish_cancel<O: Observer>(
+    observer: &O,
+    slots: &mut SlotSet<'_, O>,
+) -> Result<FollowEnd>
 where
     O::Bind: 'static,
 {
@@ -422,7 +425,7 @@ where
     Ok(FollowEnd::Cancel)
 }
 
-fn finish_err<O: Observer>(
+pub(crate) fn finish_err<O: Observer>(
     observer: &O,
     slots: &mut SlotSet<'_, O>,
     err: waitprims_core::Error,
@@ -434,7 +437,7 @@ where
     Err(err)
 }
 
-fn restore_harvested<O: Observer>(observer: &O, slots: &mut SlotSet<'_, O>) -> Result<()>
+pub(crate) fn restore_harvested<O: Observer>(observer: &O, slots: &mut SlotSet<'_, O>) -> Result<()>
 where
     O::Bind: 'static,
 {
@@ -455,26 +458,26 @@ where
     }
 }
 
-enum Turn {
+pub(crate) enum Turn {
     Idle,
     Ready,
 }
 
-struct SlotSet<'a, O: Observer> {
+pub(crate) struct SlotSet<'a, O: Observer> {
     observer: &'a O,
     registrations: &'a [Registration],
     binds: Vec<Option<Arc<O::Bind>>>,
     bind_futs: Vec<Option<BindFut<'a, O>>>,
     next_futs: Vec<Option<NextFut<'a>>>,
     harvested: Vec<Option<Observation>>,
-    fault: Option<waitprims_core::Error>,
+    pub(crate) fault: Option<waitprims_core::Error>,
 }
 
 impl<'a, O: Observer> SlotSet<'a, O>
 where
     O::Bind: 'static,
 {
-    fn new(observer: &'a O, registrations: &'a [Registration]) -> Self {
+    pub(crate) fn new(observer: &'a O, registrations: &'a [Registration]) -> Self {
         let n = registrations.len();
         let mut bind_futs = Vec::with_capacity(n);
         for registration in registrations {
@@ -500,6 +503,47 @@ where
         self.registrations
             .iter()
             .position(|reg| reg.registration_id.as_str() == registration_id)
+    }
+
+    /// Requeue unsunk custody. Harvested (newer) first, then pending
+    /// newest-first, so `restore_ready` push-front yields FIFO. Attempts
+    /// every restore and returns the first error.
+    pub(crate) fn restore_custody(
+        &mut self,
+        observer: &O,
+        pending: Vec<WaitEvent>,
+    ) -> waitprims_core::Result<()> {
+        let harvested = self.drain_replayable();
+        let mut first_err = None;
+        for (idx, obs) in harvested {
+            let Some(bind) = self.binds[idx].as_ref() else {
+                continue;
+            };
+            if let Err(err) = observer.restore_ready(bind.as_ref(), obs) {
+                if first_err.is_none() {
+                    first_err = Some(err);
+                }
+            }
+        }
+        for event in pending.into_iter().rev() {
+            let Some(idx) = self.index_of(event.registration_id.as_str()) else {
+                continue;
+            };
+            let Some(bind) = self.binds[idx].as_ref() else {
+                continue;
+            };
+            if let Err(err) =
+                observer.restore_ready(bind.as_ref(), Observation::Event(Box::new(event)))
+            {
+                if first_err.is_none() {
+                    first_err = Some(err);
+                }
+            }
+        }
+        match first_err {
+            Some(err) => Err(err),
+            None => Ok(()),
+        }
     }
 
     fn arm_next(&mut self, idx: usize) {
@@ -555,7 +599,7 @@ where
         }
     }
 
-    fn harvest_poll_ready(&mut self, observer: &O) {
+    pub(crate) fn harvest_poll_ready(&mut self, observer: &O) {
         for idx in 0..self.len() {
             if self.harvested[idx].is_some() {
                 continue;
@@ -570,7 +614,7 @@ where
         }
     }
 
-    fn take_events(&mut self) -> Vec<WaitEvent> {
+    pub(crate) fn take_events(&mut self) -> Vec<WaitEvent> {
         let mut events = Vec::new();
         for slot in &mut self.harvested {
             if let Some(Observation::Event(_)) = slot {
@@ -582,7 +626,7 @@ where
         events
     }
 
-    fn first_terminal(&self, set: &RegistrationSet) -> Option<FollowEnd> {
+    pub(crate) fn first_terminal(&self, set: &RegistrationSet) -> Option<FollowEnd> {
         for (idx, obs) in self.harvested.iter().enumerate() {
             let Some(obs) = obs else { continue };
             let registration_id = set.registrations[idx].registration_id.clone();
@@ -621,7 +665,10 @@ where
         None
     }
 
-    fn pending_required<'s>(&'s self, set: &'s RegistrationSet) -> Option<&'s Registration> {
+    pub(crate) fn pending_required<'s>(
+        &'s self,
+        set: &'s RegistrationSet,
+    ) -> Option<&'s Registration> {
         set.registrations.iter().find(|reg| {
             if !reg.required {
                 return false;
@@ -633,7 +680,7 @@ where
         })
     }
 
-    fn drain_replayable(&mut self) -> Vec<(usize, Observation)> {
+    pub(crate) fn drain_replayable(&mut self) -> Vec<(usize, Observation)> {
         let mut out = Vec::new();
         for (idx, slot) in self.harvested.iter_mut().enumerate() {
             if let Some(obs) = slot.take() {
@@ -656,7 +703,7 @@ where
         }
     }
 
-    fn rearm_idle(&mut self) {
+    pub(crate) fn rearm_idle(&mut self) {
         self.clear_nonreplayable();
         for idx in 0..self.len() {
             if self.binds[idx].is_some()
@@ -682,8 +729,8 @@ where
     }
 }
 
-struct CollectTurn<'s, 'a, O: Observer> {
-    slots: &'s mut SlotSet<'a, O>,
+pub(crate) struct CollectTurn<'s, 'a, O: Observer> {
+    pub(crate) slots: &'s mut SlotSet<'a, O>,
 }
 
 impl<O: Observer> Future for CollectTurn<'_, '_, O>

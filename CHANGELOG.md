@@ -12,6 +12,25 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.2.1]
+
+Unreleased local cut. Adds `run_coalesce` on the 0.2.0 inert-priority pin.
+Not a `0.1.x` patch.
+
+- `run_coalesce` with runtime-only `CoalescePolicy` / `CoalesceBurst`;
+  quiet cadence is clock time at first quiet arrival, then
+  `emit + min_emit_interval`
+
+## [0.2.0]
+
+Unreleased local cut. Source-breaking optional `registration.priority`
+is inert on first-match, poll-cycle, and `run_follow`. Not a `0.1.x`
+patch. `priority` is a presentation hint, not authorization.
+
+- Pin `contract: agent-wait/v0` at Crucible `v0.1.28` (`4bc95146…`)
+- Optional `Registration.priority: Option<u8>` (skip-none). Omitted and
+  explicit 50 stay digest-distinct. first-match, poll-cycle, and
+  `run_follow` do not read it
 - `run_follow` held-follow runner: bind once, emit `FollowBurst`, stop
   on runtime-only `FollowEnd`. No new `agent-wait/v0` kind
 - Follow lease posture rejects at `now >= lease_expires_at`. First-match
@@ -78,7 +97,9 @@ APIs may still move.
 - CI matrix already on main (`fast` plus hosted smokes; arm64 labs
   same-repo only)
 
-[Unreleased]: https://github.com/3leaps/waitprims/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/3leaps/waitprims/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/3leaps/waitprims/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/3leaps/waitprims/compare/v0.1.3...HEAD
 [0.1.3]: https://github.com/3leaps/waitprims/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/3leaps/waitprims/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/3leaps/waitprims/compare/v0.1.0...v0.1.1

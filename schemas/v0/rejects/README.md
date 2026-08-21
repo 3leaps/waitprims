@@ -10,7 +10,7 @@ same structural-distance invariant as `review-journal/v0`.
 
 | Directory    | Layer     | Reject must fail because                                                                                                                                          |
 | ------------ | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `schema/`    | schema    | seventh kind `live_wait_ack` · `x-` kind · both/neither start position · embedded body · missing `actor_ref`                                                      |
+| `schema/`    | schema    | seventh kind `live_wait_ack` · `x-` kind · both/neither start position · invalid registration priority · embedded body · missing `actor_ref`                      |
 | `normative/` | normative | `run_deadline` after `logical_deadline` · `no_change` with events or past deadline · deadman before deadline · required-arm outage/uncertainty as a clean outcome |
 | `set/`       | normative | coverage cardinality · ack past unretained events · silent cursor advance · revision cross                                                                        |
 
