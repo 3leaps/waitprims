@@ -10,7 +10,7 @@
 #   make release-preflight Verify pre-tag requirements
 #   make release-check     Version consistency + cargo package (does not publish)
 
-.PHONY: all help check test fmt fmt-check lint build clean version demo-follow
+.PHONY: all help check test fmt fmt-check lint build clean version demo-follow demo-coalesce
 .PHONY: precommit prepush pr-final
 .PHONY: version-patch version-minor version-major version-set version-sync version-check
 .PHONY: release-check release-preflight release-guard-tag-version
@@ -59,6 +59,7 @@ help: ## Show available targets
 	@echo "  lint            cargo clippy --workspace --all-targets -- -D warnings"
 	@echo "  build           cargo build --workspace"
 	@echo "  demo-follow     Locked offline held-follow CLI demo vs golden JSONL"
+	@echo "  demo-coalesce   Locked offline held-coalesce CLI demo vs golden JSONL"
 	@echo "  clean           cargo clean"
 	@echo "  precommit       fmt-check, clippy"
 	@echo "  prepush         fmt-check, clippy, locked tests, version-check"
@@ -125,6 +126,15 @@ demo-follow: ## Locked offline held-follow CLI demo vs golden JSONL
 		| cmp - fixtures/follow-demo/golden.jsonl
 	@echo "[ok] demo-follow matched golden JSONL"
 
+demo-coalesce: ## Locked offline held-coalesce CLI demo vs golden JSONL
+	$(CARGO) build --locked --offline -p waitprims-cli
+	./target/debug/waitprims --log-level error coalesce \
+		--registration-set fixtures/coalesce-demo/registration_set.json \
+		--request fixtures/coalesce-demo/live_wait_request.json \
+		--script fixtures/coalesce-demo/coalesce.json \
+		| cmp - fixtures/coalesce-demo/golden.jsonl
+	@echo "[ok] demo-coalesce matched golden JSONL"
+
 clean: ## Remove build artifacts
 	$(CARGO) clean
 	@echo "[ok] Clean complete"
@@ -135,7 +145,7 @@ precommit: fmt-check lint ## Fast checks for every commit
 prepush: fmt-check lint test version-check ## Thorough checks before push
 	@echo "[ok] Pre-push checks passed"
 
-pr-final: prepush demo-follow ## Final PR merge-readiness gate
+pr-final: prepush demo-follow demo-coalesce ## Final PR merge-readiness gate
 	@echo "[ok] PR final checks passed"
 
 # -----------------------------------------------------------------------------

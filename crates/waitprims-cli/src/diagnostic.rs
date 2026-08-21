@@ -6,7 +6,7 @@
 use std::io::Write;
 
 use serde_json::{json, Value};
-use waitprims_async::{FollowBurst, FollowEnd, TerminalArmKind};
+use waitprims_async::{CoalesceBurst, FollowBurst, FollowEnd, TerminalArmKind};
 use waitprims_core::{
     resolve_bundled, Error, MessageType, Result, CAPABILITY, PINNED_CRUCIBLE_SHA,
 };
@@ -21,6 +21,21 @@ pub fn burst_json(sequence: u64, burst: &FollowBurst) -> Result<String> {
         .map_err(|_| Error::MalformedJson)?;
     compact_json(&json!({
         "diagnostic_type": "follow_burst",
+        "sequence": sequence,
+        "events": events,
+    }))
+}
+
+/// Compact JSON for one accepted coalesced burst. `sequence` is 1-based.
+pub fn coalesce_burst_json(sequence: u64, burst: &CoalesceBurst) -> Result<String> {
+    let events: Vec<Value> = burst
+        .events
+        .iter()
+        .map(serde_json::to_value)
+        .collect::<std::result::Result<_, _>>()
+        .map_err(|_| Error::MalformedJson)?;
+    compact_json(&json!({
+        "diagnostic_type": "coalesce_burst",
         "sequence": sequence,
         "events": events,
     }))
@@ -99,6 +114,15 @@ impl<W: Write> JsonlSink<W> {
     pub fn emit_burst(&mut self, burst: &FollowBurst) -> Result<()> {
         let next = self.sequence + 1;
         let line = burst_json(next, burst)?;
+        write_record(&mut self.writer, &line)?;
+        self.sequence = next;
+        Ok(())
+    }
+
+    /// Serialize, write, then increment for a coalesced burst.
+    pub fn emit_coalesce_burst(&mut self, burst: &CoalesceBurst) -> Result<()> {
+        let next = self.sequence + 1;
+        let line = coalesce_burst_json(next, burst)?;
         write_record(&mut self.writer, &line)?;
         self.sequence = next;
         Ok(())
@@ -203,6 +227,81 @@ mod tests {
 
         fn flush(&mut self) -> io::Result<()> {
             Ok(())
+        }
+    }
+
+    #[test]
+    fn coalesce_burst_view_is_diagnostic_only() {
+        let burst = CoalesceBurst {
+            events: vec![sample_event()],
+        };
+        let line = coalesce_burst_json(1, &burst).expect("json");
+        let value: Value = serde_json::from_str(&line).expect("parse");
+        assert_eq!(value["diagnostic_type"], "coalesce_burst");
+        assert!(value.get("message_type").is_none());
+        assert_eq!(value["sequence"], 1);
+        assert_eq!(
+            value["events"][0]["proposed_next_anchor"]["value"],
+            "anc:after-sms-1"
+        );
+        waitprims_core::validate_message(&line).expect_err("must fail wire admission");
+    }
+
+    #[test]
+    fn write_failure_after_accepted_coalesce_burst_keeps_line_and_skips_end() {
+        let writer = FailAfterNewline {
+            newlines: 0,
+            fail_after: 1,
+            buf: Vec::new(),
+        };
+        let mut sink = JsonlSink::new(writer);
+        let burst = CoalesceBurst {
+            events: vec![sample_event()],
+        };
+        sink.emit_coalesce_burst(&burst).expect("first burst");
+        assert_eq!(sink.sequence(), 1);
+        let err = sink
+            .emit_coalesce_burst(&burst)
+            .expect_err("second burst must fail");
+        assert!(matches!(
+            err,
+            Error::Contract {
+                path: "stdout",
+                constraint: "write"
+            }
+        ));
+        let written = String::from_utf8(sink.writer.buf.clone()).expect("utf8");
+        assert!(written.contains("\"sequence\":1"));
+        assert!(written.contains("\"diagnostic_type\":\"coalesce_burst\""));
+        assert!(!written.contains("\"sequence\":2"));
+        assert!(!written.contains("follow_end"));
+        assert_eq!(sink.sequence(), 1);
+    }
+
+    /// Golden for the coalesce cancel and overflow views (no new script syntax).
+    #[test]
+    fn coalesce_end_views_reuse_follow_end_vocabulary() {
+        let cases = [
+            (
+                FollowEnd::Cancel,
+                r#"{"diagnostic_type":"follow_end","end_kind":"cancel"}"#,
+            ),
+            (
+                FollowEnd::TerminalArm {
+                    registration_id: IdToken::new("reg:sms-1"),
+                    kind: TerminalArmKind::Overflow,
+                    reason_code: IdToken::new("buffer_overflow"),
+                },
+                r#"{"diagnostic_type":"follow_end","end_kind":"terminal_arm","registration_id":"reg:sms-1","terminal_kind":"overflow","reason_code":"buffer_overflow"}"#,
+            ),
+        ];
+        for (end, expected) in cases {
+            let line = end_json(&end).expect("json");
+            let got: Value = serde_json::from_str(&line).expect("parse");
+            let want: Value = serde_json::from_str(expected).expect("expected");
+            assert_eq!(got, want);
+            waitprims_core::validate_message(&line).expect_err("must fail wire admission");
+            assert!(!line.contains("message_type"));
         }
     }
 

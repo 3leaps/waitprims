@@ -25,6 +25,10 @@ fn follow_demo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/follow-demo")
 }
 
+fn coalesce_demo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/coalesce-demo")
+}
+
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
@@ -1260,6 +1264,335 @@ fn follow_admission_failure_is_zero_stdout() {
         stderr.contains("waitprims follow:"),
         "expected waitprims follow: prefix: {stderr}"
     );
+}
+
+#[test]
+fn coalesce_help_shows_file_and_policy_flags() {
+    let output = bin()
+        .args(["coalesce", "--help"])
+        .output()
+        .expect("coalesce --help");
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--registration-set"), "stdout={stdout}");
+    assert!(stdout.contains("--request"), "stdout={stdout}");
+    assert!(stdout.contains("--script"), "stdout={stdout}");
+    assert!(stdout.contains("--min-emit-interval"), "stdout={stdout}");
+    assert!(stdout.contains("--urgent-at"), "stdout={stdout}");
+    assert!(
+        !stdout.contains("--cancel"),
+        "coalesce --help must not offer --cancel"
+    );
+}
+
+#[test]
+fn coalesce_demo_matches_golden_jsonl() {
+    let root = coalesce_demo_root();
+    let output = bin()
+        .args([
+            "--log-level",
+            "error",
+            "coalesce",
+            "--registration-set",
+            root.join("registration_set.json").to_str().unwrap(),
+            "--request",
+            root.join("live_wait_request.json").to_str().unwrap(),
+            "--script",
+            root.join("coalesce.json").to_str().unwrap(),
+        ])
+        .output()
+        .expect("run coalesce demo");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "stderr must be empty at --log-level error: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let expected = std::fs::read_to_string(root.join("golden.jsonl")).expect("golden");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        expected,
+        "coalesce stdout must match golden.jsonl"
+    );
+    let records = follow_jsonl_records(&output.stdout);
+    assert!(records.len() >= 3, "need >=2 bursts plus end: {records:?}");
+    assert_eq!(records[0]["diagnostic_type"], "coalesce_burst");
+    assert_eq!(records[0]["sequence"], 1);
+    assert_eq!(records[0]["events"][0]["registration_id"], "reg:urgent-1");
+    assert_eq!(records[1]["diagnostic_type"], "coalesce_burst");
+    assert_eq!(records[1]["sequence"], 2);
+    assert_eq!(records[1]["events"][0]["registration_id"], "reg:sms-1");
+    let last = records.last().expect("end");
+    assert_eq!(last["diagnostic_type"], "follow_end");
+    assert_eq!(last["end_kind"], "deadline");
+    for record in &records {
+        assert!(record.get("message_type").is_none(), "{record}");
+        let line = serde_json::to_string(record).expect("line");
+        validate_message(&line).expect_err("diagnostic JSONL must fail wire admission");
+    }
+}
+
+#[test]
+fn coalesce_unknown_registration_is_zero_stdout() {
+    let root = coalesce_demo_root();
+    let script = serde_json::json!({
+        "events": [{
+            "event_id": "evt:secret-1",
+            "method_id": "sms_inbound",
+            "subject_kind": "inbox",
+            "subject_id": "inbox:sms-1",
+            "occurred_at": "2026-08-15T16:05:00Z",
+            "payload": {
+                "payload_ref": "msg:secret-payload-xyz",
+                "content_digest": {
+                    "algorithm": "sha256",
+                    "value": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+                }
+            },
+            "registration_id": "reg:unknown-1",
+            "source_instance_ref": "source:provider-a",
+            "observed_at": "2026-08-15T16:05:00Z",
+            "start_anchor": {"kind": "provider_opaque", "value": "anc:cursor-0"},
+            "proposed_next_anchor": {"kind": "provider_opaque", "value": "anc:after-1"},
+            "replay_status": "fresh",
+            "correlation_id": "corr:aw-coalesce-1"
+        }]
+    });
+    let script_path = write_temp_json("coalesce-unknown-reg", script.to_string().as_bytes());
+    let output = bin()
+        .args([
+            "coalesce",
+            "--registration-set",
+            root.join("registration_set.json").to_str().unwrap(),
+            "--request",
+            root.join("live_wait_request.json").to_str().unwrap(),
+            "--script",
+            script_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("coalesce unknown registration");
+    let _ = std::fs::remove_file(&script_path);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        output.stdout.is_empty(),
+        "stdout={}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("unknown_registration"), "stderr={stderr}");
+    assert!(
+        !stderr.contains("msg:secret-payload-xyz"),
+        "stderr leaked payload: {stderr}"
+    );
+}
+
+#[test]
+fn coalesce_admission_failure_is_zero_stdout() {
+    let root = coalesce_demo_root();
+    let output = bin()
+        .args([
+            "coalesce",
+            "--registration-set",
+            root.join("coalesce.json").to_str().unwrap(),
+            "--request",
+            root.join("live_wait_request.json").to_str().unwrap(),
+            "--script",
+            root.join("coalesce.json").to_str().unwrap(),
+        ])
+        .output()
+        .expect("coalesce bad set");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        output.stdout.is_empty(),
+        "stdout={}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("waitprims coalesce:"),
+        "expected waitprims coalesce: prefix: {stderr}"
+    );
+}
+
+#[test]
+fn coalesce_rejects_uri_without_leaking_hostname() {
+    let root = coalesce_demo_root();
+    let output = bin()
+        .args([
+            "coalesce",
+            "--registration-set",
+            root.join("registration_set.json").to_str().unwrap(),
+            "--request",
+            "https://example.invalid/live_wait_request.json",
+            "--script",
+            root.join("coalesce.json").to_str().unwrap(),
+        ])
+        .output()
+        .expect("coalesce uri request");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("example.invalid"),
+        "stderr leaked hostname: {stderr}"
+    );
+    assert!(
+        stderr.contains("local_path_required"),
+        "expected local_path_required: {stderr}"
+    );
+}
+
+#[test]
+fn coalesce_lease_error_after_burst_keeps_burst_and_skips_end() {
+    let root = coalesce_demo_root();
+    let mut set: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(root.join("registration_set.json")).expect("set"),
+    )
+    .expect("set json");
+    for reg in set["registrations"].as_array_mut().expect("regs") {
+        reg["lease_expires_at"] = serde_json::json!("2026-08-15T16:08:00Z");
+    }
+    let digest = registration_digest(&set["registrations"].to_string()).expect("digest");
+    set["registration_digest"]["value"] = serde_json::json!(digest);
+    let set_path = write_temp_json("coalesce-short-lease-set", set.to_string().as_bytes());
+    // One urgent event flushes immediately as burst 1, before the lease
+    // fires at 16:08. The lease error then fails the session: burst stays,
+    // no follow_end.
+    let urgent = serde_json::json!({
+        "events": [{
+            "event_id": "evt:urgent-1",
+            "method_id": "sms_inbound",
+            "subject_kind": "inbox",
+            "subject_id": "inbox:urgent-1",
+            "occurred_at": "2026-08-15T16:05:00Z",
+            "payload": {
+                "payload_ref": "msg:urgent-payload-1",
+                "content_digest": {
+                    "algorithm": "sha256",
+                    "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+            },
+            "registration_id": "reg:urgent-1",
+            "source_instance_ref": "source:provider-a",
+            "observed_at": "2026-08-15T16:05:00Z",
+            "start_anchor": {"kind": "provider_opaque", "value": "anc:cursor-0"},
+            "proposed_next_anchor": {"kind": "provider_opaque", "value": "anc:after-urgent-1"},
+            "replay_status": "fresh",
+            "correlation_id": "corr:aw-coalesce-1"
+        }]
+    });
+    let script_path = write_temp_json("coalesce-urgent-only", urgent.to_string().as_bytes());
+    let output = bin()
+        .args([
+            "coalesce",
+            "--registration-set",
+            set_path.to_str().unwrap(),
+            "--request",
+            root.join("live_wait_request.json").to_str().unwrap(),
+            "--script",
+            script_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("coalesce short lease");
+    let _ = std::fs::remove_file(&set_path);
+    let _ = std::fs::remove_file(&script_path);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("\"diagnostic_type\":\"coalesce_burst\""),
+        "stdout={stdout}"
+    );
+    assert!(
+        !stdout.contains("follow_end"),
+        "must not fabricate follow_end: {stdout}"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("lease_reauth") || stderr.contains("lease"),
+        "stderr={stderr}"
+    );
+}
+
+#[test]
+fn coalesce_policy_flags_match_defaults() {
+    let root = coalesce_demo_root();
+    let output = bin()
+        .args([
+            "--log-level",
+            "error",
+            "coalesce",
+            "--registration-set",
+            root.join("registration_set.json").to_str().unwrap(),
+            "--request",
+            root.join("live_wait_request.json").to_str().unwrap(),
+            "--script",
+            root.join("coalesce.json").to_str().unwrap(),
+            "--min-emit-interval",
+            "10s",
+            "--urgent-at",
+            "100",
+        ])
+        .output()
+        .expect("run coalesce with policy flags");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let expected = std::fs::read_to_string(root.join("golden.jsonl")).expect("golden");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        expected,
+        "explicit default policy flags must match golden"
+    );
+}
+
+#[test]
+fn coalesce_ongoing_run_produces_bursts_then_end() {
+    let root = coalesce_demo_root();
+    let output = bin()
+        .args([
+            "coalesce",
+            "--registration-set",
+            root.join("registration_set.json").to_str().unwrap(),
+            "--request",
+            root.join("live_wait_request.json").to_str().unwrap(),
+            "--script",
+            root.join("coalesce.json").to_str().unwrap(),
+        ])
+        .output()
+        .expect("run coalesce");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records = follow_jsonl_records(&output.stdout);
+    assert!(records.len() >= 3, "need >=2 bursts plus end: {records:?}");
+    for record in &records {
+        assert!(record.get("message_type").is_none(), "{record}");
+        let line = serde_json::to_string(record).expect("line");
+        validate_message(&line).expect_err("diagnostic JSONL must fail wire admission");
+    }
+    assert_eq!(records[0]["sequence"], 1);
+    assert_eq!(records[1]["sequence"], 2);
+    assert_eq!(records.last().expect("end")["end_kind"], "deadline");
 }
 
 #[test]
