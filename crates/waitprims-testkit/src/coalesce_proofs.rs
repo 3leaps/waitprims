@@ -1055,3 +1055,696 @@ async fn cancel_at_deadline_keeps_required_bind_pending() {
     );
     assert_eq!(observer.live_bind_count(), 0);
 }
+
+// ---------------------------------------------------------------------------
+// Acceptance proof matrix
+// ---------------------------------------------------------------------------
+
+/// Pump a manual clock forward and let the runner observe the advance.
+async fn pump(clock: &FakeClock, at: &str) {
+    clock.advance_to(&ts(at));
+    for _ in 0..96 {
+        tokio::task::yield_now().await;
+    }
+}
+
+#[tokio::test]
+async fn scheduled_quiet_sink_err_drops_and_releases_no_replay() {
+    let set = registration_set(vec![registration(
+        "reg:sms-1",
+        "sms_inbound",
+        "sms:inbox-1",
+    )]);
+    let request = live_wait_request();
+    let script = Script {
+        buffer_limit: 8,
+        events: vec![wait_event(
+            "reg:sms-1",
+            "sms_inbound",
+            "evt:1",
+            "2026-08-15T16:05:00Z",
+        )],
+    };
+    let clock = FakeClock::manual(request.created_at.clone());
+    let observer = ScriptedObserver::new(script, clock.clone());
+    let policy = CoalescePolicy::new(Duration::from_secs(10));
+    let cancel = Cancel::new();
+    let (result, _) = tokio::join!(
+        run_coalesce(
+            &observer,
+            &clock,
+            &cancel,
+            &set,
+            &request,
+            &policy,
+            |_| async { Err(ValidationError::new("/sink", "refused").into()) },
+        ),
+        async {
+            pump(&clock, "2026-08-15T16:05:00Z").await;
+            // Scheduled quiet emit fires on the timer and the sink Err drops it.
+            pump(&clock, "2026-08-15T16:05:10Z").await;
+            pump(&clock, "2026-08-15T16:20:00Z").await;
+        }
+    );
+    let err = result.expect_err("scheduled quiet sink err");
+    assert!(err.to_string().contains("refused"), "{err}");
+    assert_eq!(observer.live_bind_count(), 0);
+    assert!(
+        observer
+            .queued_event_ids()
+            .get("reg:sms-1")
+            .map(Vec::is_empty)
+            .unwrap_or(true),
+        "scheduled drained burst must not replay: {:?}",
+        observer.queued_event_ids()
+    );
+}
+
+#[tokio::test]
+async fn final_flush_sink_err_drops_and_releases_no_replay() {
+    let set = registration_set(vec![registration(
+        "reg:sms-1",
+        "sms_inbound",
+        "sms:inbox-1",
+    )]);
+    let request = live_wait_request();
+    let script = Script {
+        buffer_limit: 8,
+        events: vec![wait_event(
+            "reg:sms-1",
+            "sms_inbound",
+            "evt:1",
+            "2026-08-15T16:05:00Z",
+        )],
+    };
+    let clock = FakeClock::manual(request.created_at.clone());
+    let observer = ScriptedObserver::new(script, clock.clone());
+    let policy = CoalescePolicy::new(Duration::from_secs(3600));
+    let cancel = Cancel::new();
+    let (result, _) = tokio::join!(
+        run_coalesce(
+            &observer,
+            &clock,
+            &cancel,
+            &set,
+            &request,
+            &policy,
+            |_| async { Err(ValidationError::new("/sink", "refused").into()) },
+        ),
+        async {
+            pump(&clock, "2026-08-15T16:05:00Z").await;
+            // Deadline final_flush drains the buffered quiet event into the sink.
+            pump(&clock, "2026-08-15T16:20:00Z").await;
+        }
+    );
+    let err = result.expect_err("final flush sink err");
+    assert!(err.to_string().contains("refused"), "{err}");
+    assert_eq!(observer.live_bind_count(), 0);
+    assert!(
+        observer
+            .queued_event_ids()
+            .get("reg:sms-1")
+            .map(Vec::is_empty)
+            .unwrap_or(true),
+        "final drained burst must not replay: {:?}",
+        observer.queued_event_ids()
+    );
+}
+
+#[tokio::test]
+async fn aggregate_event_overflow_restores_custody() {
+    let mut set = registration_set(vec![
+        registration("reg:a", "sms_inbound", "a"),
+        registration("reg:b", "sms_inbound", "b"),
+    ]);
+    set.aggregate_limits.max_events = 1;
+    let request = live_wait_request();
+    let at = "2026-08-15T16:05:00Z";
+    let script = Script {
+        buffer_limit: 8,
+        events: vec![
+            wait_event("reg:a", "sms_inbound", "evt:a", at),
+            wait_event("reg:b", "sms_inbound", "evt:b", at),
+        ],
+    };
+    let clock = FakeClock::auto(request.created_at.clone());
+    let observer = ScriptedObserver::new(script, clock.clone());
+    let policy = CoalescePolicy::new(Duration::from_secs(3600));
+    let end = run_coalesce(
+        &observer,
+        &clock,
+        &Cancel::new(),
+        &set,
+        &request,
+        &policy,
+        |_| async { Ok(()) },
+    )
+    .await
+    .expect("coalesce");
+    assert_eq!(
+        end,
+        FollowEnd::TerminalArm {
+            registration_id: waitprims_core::IdToken::new("reg:b"),
+            kind: TerminalArmKind::Overflow,
+            reason_code: waitprims_core::IdToken::new("buffer_overflow"),
+        }
+    );
+    assert_eq!(observer.live_bind_count(), 0);
+    assert_eq!(
+        observer.queued_event_ids().get("reg:a").map(Vec::as_slice),
+        Some(["evt:a".to_string()].as_slice())
+    );
+    assert_eq!(
+        observer.queued_event_ids().get("reg:b").map(Vec::as_slice),
+        Some(["evt:b".to_string()].as_slice())
+    );
+}
+
+#[tokio::test]
+async fn aggregate_byte_overflow_restores_custody() {
+    let mut set = registration_set(vec![
+        registration("reg:a", "sms_inbound", "a"),
+        registration("reg:b", "sms_inbound", "b"),
+    ]);
+    // One event ~= 77 surface bytes; two exceed 100.
+    set.aggregate_limits.max_bytes = 100;
+    let request = live_wait_request();
+    let at = "2026-08-15T16:05:00Z";
+    let script = Script {
+        buffer_limit: 8,
+        events: vec![
+            wait_event("reg:a", "sms_inbound", "evt:a", at),
+            wait_event("reg:b", "sms_inbound", "evt:b", at),
+        ],
+    };
+    let clock = FakeClock::auto(request.created_at.clone());
+    let observer = ScriptedObserver::new(script, clock.clone());
+    let policy = CoalescePolicy::new(Duration::from_secs(3600));
+    let end = run_coalesce(
+        &observer,
+        &clock,
+        &Cancel::new(),
+        &set,
+        &request,
+        &policy,
+        |_| async { Ok(()) },
+    )
+    .await
+    .expect("coalesce");
+    assert_eq!(
+        end,
+        FollowEnd::TerminalArm {
+            registration_id: waitprims_core::IdToken::new("reg:b"),
+            kind: TerminalArmKind::Overflow,
+            reason_code: waitprims_core::IdToken::new("buffer_overflow"),
+        }
+    );
+    assert_eq!(observer.live_bind_count(), 0);
+    assert_eq!(
+        observer.queued_event_ids().get("reg:a").map(Vec::as_slice),
+        Some(["evt:a".to_string()].as_slice())
+    );
+    assert_eq!(
+        observer.queued_event_ids().get("reg:b").map(Vec::as_slice),
+        Some(["evt:b".to_string()].as_slice())
+    );
+}
+
+#[tokio::test]
+async fn per_registration_event_overflow_restores_custody() {
+    let mut set = registration_set(vec![registration("reg:a", "sms_inbound", "a")]);
+    if let Some(reg) = set.registrations.first_mut() {
+        reg.bounds.max_events = 1;
+    }
+    let request = live_wait_request();
+    let at = "2026-08-15T16:05:00Z";
+    let script = Script {
+        buffer_limit: 8,
+        events: vec![
+            wait_event("reg:a", "sms_inbound", "evt:a1", at),
+            wait_event("reg:a", "sms_inbound", "evt:a2", at),
+        ],
+    };
+    let clock = FakeClock::auto(request.created_at.clone());
+    let observer = ScriptedObserver::new(script, clock.clone());
+    let policy = CoalescePolicy::new(Duration::from_secs(3600));
+    let end = run_coalesce(
+        &observer,
+        &clock,
+        &Cancel::new(),
+        &set,
+        &request,
+        &policy,
+        |_| async { Ok(()) },
+    )
+    .await
+    .expect("coalesce");
+    assert_eq!(
+        end,
+        FollowEnd::TerminalArm {
+            registration_id: waitprims_core::IdToken::new("reg:a"),
+            kind: TerminalArmKind::Overflow,
+            reason_code: waitprims_core::IdToken::new("buffer_overflow"),
+        }
+    );
+    assert_eq!(observer.live_bind_count(), 0);
+    assert_eq!(
+        observer.queued_event_ids().get("reg:a").map(Vec::as_slice),
+        Some(["evt:a1".to_string(), "evt:a2".to_string()].as_slice())
+    );
+}
+
+#[tokio::test]
+async fn per_registration_byte_overflow_restores_custody() {
+    let mut set = registration_set(vec![registration("reg:a", "sms_inbound", "a")]);
+    if let Some(reg) = set.registrations.first_mut() {
+        reg.bounds.max_bytes = 100;
+    }
+    let request = live_wait_request();
+    let at = "2026-08-15T16:05:00Z";
+    let script = Script {
+        buffer_limit: 8,
+        events: vec![
+            wait_event("reg:a", "sms_inbound", "evt:a1", at),
+            wait_event("reg:a", "sms_inbound", "evt:a2", at),
+        ],
+    };
+    let clock = FakeClock::auto(request.created_at.clone());
+    let observer = ScriptedObserver::new(script, clock.clone());
+    let policy = CoalescePolicy::new(Duration::from_secs(3600));
+    let end = run_coalesce(
+        &observer,
+        &clock,
+        &Cancel::new(),
+        &set,
+        &request,
+        &policy,
+        |_| async { Ok(()) },
+    )
+    .await
+    .expect("coalesce");
+    assert_eq!(
+        end,
+        FollowEnd::TerminalArm {
+            registration_id: waitprims_core::IdToken::new("reg:a"),
+            kind: TerminalArmKind::Overflow,
+            reason_code: waitprims_core::IdToken::new("buffer_overflow"),
+        }
+    );
+    assert_eq!(observer.live_bind_count(), 0);
+    assert_eq!(
+        observer.queued_event_ids().get("reg:a").map(Vec::as_slice),
+        Some(["evt:a1".to_string(), "evt:a2".to_string()].as_slice())
+    );
+}
+
+#[tokio::test]
+async fn mixed_urgent_quiet_overflow_restores_custody() {
+    let mut set = registration_set(vec![
+        with_priority(
+            registration("reg:quiet", "sms_inbound", "q"),
+            waitprims_core::PRIORITY_NORMAL,
+        ),
+        with_priority(
+            registration("reg:urgent", "sms_inbound", "u"),
+            PRIORITY_URGENT,
+        ),
+    ]);
+    if let Some(quiet) = set
+        .registrations
+        .iter_mut()
+        .find(|reg| reg.registration_id.as_str() == "reg:quiet")
+    {
+        quiet.bounds.max_events = 2;
+    }
+    let request = live_wait_request();
+    let script = Script {
+        buffer_limit: 8,
+        events: vec![
+            wait_event("reg:quiet", "sms_inbound", "evt:q1", "2026-08-15T16:05:00Z"),
+            wait_event("reg:quiet", "sms_inbound", "evt:q2", "2026-08-15T16:06:00Z"),
+            wait_event("reg:quiet", "sms_inbound", "evt:q3", "2026-08-15T16:10:00Z"),
+            // Urgent lands in the same turn as the quiet overflow trigger, so it
+            // is unsunk and must be restored, not emitted.
+            wait_event(
+                "reg:urgent",
+                "sms_inbound",
+                "evt:u1",
+                "2026-08-15T16:10:00Z",
+            ),
+        ],
+    };
+    let clock = FakeClock::manual(request.created_at.clone());
+    let observer = ScriptedObserver::new(script, clock.clone());
+    let policy = CoalescePolicy::new(Duration::from_secs(3600));
+    let cancel = Cancel::new();
+    let (end, _) = tokio::join!(
+        run_coalesce(
+            &observer,
+            &clock,
+            &cancel,
+            &set,
+            &request,
+            &policy,
+            |_| async { Ok(()) }
+        ),
+        async {
+            pump(&clock, "2026-08-15T16:05:00Z").await;
+            pump(&clock, "2026-08-15T16:06:00Z").await;
+            pump(&clock, "2026-08-15T16:10:00Z").await;
+        }
+    );
+    let end = end.expect("coalesce");
+    assert_eq!(
+        end,
+        FollowEnd::TerminalArm {
+            registration_id: waitprims_core::IdToken::new("reg:quiet"),
+            kind: TerminalArmKind::Overflow,
+            reason_code: waitprims_core::IdToken::new("buffer_overflow"),
+        }
+    );
+    assert_eq!(observer.live_bind_count(), 0);
+    assert_eq!(
+        observer
+            .queued_event_ids()
+            .get("reg:quiet")
+            .map(Vec::as_slice),
+        Some(
+            [
+                "evt:q1".to_string(),
+                "evt:q2".to_string(),
+                "evt:q3".to_string()
+            ]
+            .as_slice()
+        ),
+        "quiet custody: {:?}",
+        observer.queued_event_ids()
+    );
+    assert_eq!(
+        observer
+            .queued_event_ids()
+            .get("reg:urgent")
+            .map(Vec::as_slice),
+        Some(["evt:u1".to_string()].as_slice()),
+        "urgent unsunk must be restored: {:?}",
+        observer.queued_event_ids()
+    );
+}
+
+#[tokio::test]
+async fn final_flush_overflow_restores_custody() {
+    let mut set = registration_set(vec![registration("reg:a", "sms_inbound", "a")]);
+    if let Some(reg) = set.registrations.first_mut() {
+        reg.bounds.max_events = 2;
+    }
+    let mut request = live_wait_request();
+    request.run_deadline = ts("2026-08-15T16:10:00Z");
+    let script = Script {
+        buffer_limit: 8,
+        events: vec![
+            wait_event("reg:a", "sms_inbound", "evt:a1", "2026-08-15T16:05:00Z"),
+            wait_event("reg:a", "sms_inbound", "evt:a2", "2026-08-15T16:06:00Z"),
+            wait_event("reg:a", "sms_inbound", "evt:a3", "2026-08-15T16:10:00Z"),
+        ],
+    };
+    let clock = FakeClock::manual(request.created_at.clone());
+    let observer = ScriptedObserver::new(script, clock.clone());
+    let policy = CoalescePolicy::new(Duration::from_secs(3600));
+    let cancel = Cancel::new();
+    let (end, _) = tokio::join!(
+        run_coalesce(
+            &observer,
+            &clock,
+            &cancel,
+            &set,
+            &request,
+            &policy,
+            |_| async { Ok(()) },
+        ),
+        async {
+            pump(&clock, "2026-08-15T16:05:00Z").await;
+            pump(&clock, "2026-08-15T16:06:00Z").await;
+            pump(&clock, "2026-08-15T16:10:00Z").await;
+        }
+    );
+    let end = end.expect("coalesce");
+    assert_eq!(
+        end,
+        FollowEnd::TerminalArm {
+            registration_id: waitprims_core::IdToken::new("reg:a"),
+            kind: TerminalArmKind::Overflow,
+            reason_code: waitprims_core::IdToken::new("buffer_overflow"),
+        }
+    );
+    assert_eq!(observer.live_bind_count(), 0);
+    assert_eq!(
+        observer.queued_event_ids().get("reg:a").map(Vec::as_slice),
+        Some(
+            [
+                "evt:a1".to_string(),
+                "evt:a2".to_string(),
+                "evt:a3".to_string()
+            ]
+            .as_slice()
+        ),
+        "final-flush overflow custody: {:?}",
+        observer.queued_event_ids()
+    );
+}
+
+#[tokio::test]
+async fn repeated_urgent_traffic_does_not_starve_quiet() {
+    let set = registration_set(vec![
+        registration("reg:quiet", "sms_inbound", "q"),
+        with_priority(
+            registration("reg:urgent", "sms_inbound", "u"),
+            PRIORITY_URGENT,
+        ),
+    ]);
+    let request = live_wait_request();
+    let script = Script {
+        buffer_limit: 8,
+        events: vec![
+            wait_event("reg:quiet", "sms_inbound", "evt:q", "2026-08-15T16:05:00Z"),
+            wait_event(
+                "reg:urgent",
+                "sms_inbound",
+                "evt:u1",
+                "2026-08-15T16:05:05Z",
+            ),
+            wait_event(
+                "reg:urgent",
+                "sms_inbound",
+                "evt:u2",
+                "2026-08-15T16:05:07Z",
+            ),
+            wait_event(
+                "reg:urgent",
+                "sms_inbound",
+                "evt:u3",
+                "2026-08-15T16:05:08Z",
+            ),
+        ],
+    };
+    let clock = FakeClock::manual(request.created_at.clone());
+    let observer = ScriptedObserver::new(script, clock.clone());
+    let bursts = Arc::new(Mutex::new(Vec::new()));
+    let policy = CoalescePolicy::new(Duration::from_secs(10));
+    let cancel = Cancel::new();
+    let (end, _) = tokio::join!(
+        run_coalesce(&observer, &clock, &cancel, &set, &request, &policy, {
+            let bursts = bursts.clone();
+            move |burst| {
+                push_ids(&bursts, &burst);
+                async { Ok(()) }
+            }
+        }),
+        async {
+            pump(&clock, "2026-08-15T16:05:00Z").await;
+            pump(&clock, "2026-08-15T16:05:05Z").await;
+            pump(&clock, "2026-08-15T16:05:07Z").await;
+            pump(&clock, "2026-08-15T16:05:08Z").await;
+            // Quiet window (16:05:10) must still fire despite urgent traffic.
+            pump(&clock, "2026-08-15T16:05:10Z").await;
+            pump(&clock, "2026-08-15T16:20:00Z").await;
+        }
+    );
+    let end = end.expect("coalesce");
+    assert_eq!(end, FollowEnd::Deadline);
+    assert_eq!(
+        ids(&bursts),
+        vec![
+            vec!["evt:u1".to_string()],
+            vec!["evt:u2".to_string()],
+            vec!["evt:u3".to_string()],
+            vec!["evt:q".to_string()],
+        ],
+        "quiet must flush on its timer despite repeated urgent traffic"
+    );
+}
+
+#[tokio::test]
+async fn multi_registration_multi_turn_burst_order() {
+    let set = registration_set(vec![
+        registration("reg:a", "sms_inbound", "a"),
+        registration("reg:b", "sms_inbound", "b"),
+    ]);
+    let request = live_wait_request();
+    let script = Script {
+        buffer_limit: 8,
+        events: vec![
+            wait_event("reg:a", "sms_inbound", "evt:a1", "2026-08-15T16:05:00Z"),
+            wait_event("reg:b", "sms_inbound", "evt:b1", "2026-08-15T16:05:00Z"),
+            wait_event("reg:a", "sms_inbound", "evt:a2", "2026-08-15T16:06:00Z"),
+        ],
+    };
+    let clock = FakeClock::manual(request.created_at.clone());
+    let observer = ScriptedObserver::new(script, clock.clone());
+    let bursts = Arc::new(Mutex::new(Vec::new()));
+    let policy = CoalescePolicy::new(Duration::from_secs(3600));
+    let cancel = Cancel::new();
+    let (end, _) = tokio::join!(
+        run_coalesce(&observer, &clock, &cancel, &set, &request, &policy, {
+            let bursts = bursts.clone();
+            move |burst| {
+                push_ids(&bursts, &burst);
+                async { Ok(()) }
+            }
+        }),
+        async {
+            pump(&clock, "2026-08-15T16:05:00Z").await;
+            pump(&clock, "2026-08-15T16:06:00Z").await;
+            pump(&clock, "2026-08-15T16:20:00Z").await;
+        }
+    );
+    let end = end.expect("coalesce");
+    assert_eq!(end, FollowEnd::Deadline);
+    // Turn FIFO (16:05 then 16:06), registration-set order within a turn
+    // (reg:a before reg:b), per-registration FIFO (a1 before a2).
+    assert_eq!(
+        ids(&bursts),
+        vec![vec![
+            "evt:a1".to_string(),
+            "evt:b1".to_string(),
+            "evt:a2".to_string(),
+        ]]
+    );
+}
+
+/// Observer wrapper that records every `next` invocation in order.
+struct NextCounting {
+    inner: ScriptedObserver,
+    calls: Arc<Mutex<Vec<String>>>,
+}
+
+impl Observer for NextCounting {
+    type Bind = TrackedBind;
+
+    async fn bind(&self, registration: &Registration) -> Result<Self::Bind> {
+        self.inner.bind(registration).await
+    }
+
+    async fn next(&self, bind: &Self::Bind) -> Result<Observation> {
+        self.calls
+            .lock()
+            .expect("calls")
+            .push(bind.registration_id.as_str().to_string());
+        self.inner.next(bind).await
+    }
+
+    async fn cancel(&self, bind: &Self::Bind) -> Result<()> {
+        self.inner.cancel(bind).await
+    }
+
+    fn restore_ready(&self, bind: &Self::Bind, obs: Observation) -> Result<()> {
+        self.inner.restore_ready(bind, obs)
+    }
+}
+
+/// Held binds + backpressure across more than two successful emits:
+/// `Observer::next` is not called again until the prior `on_burst` returns `Ok`.
+#[tokio::test]
+async fn held_binds_backpressure_across_multiple_emits() {
+    let set = registration_set(vec![with_priority(
+        registration("reg:sms-1", "sms_inbound", "sms:inbox-1"),
+        PRIORITY_URGENT,
+    )]);
+    let request = live_wait_request();
+    let script = Script {
+        buffer_limit: 8,
+        events: vec![
+            wait_event("reg:sms-1", "sms_inbound", "evt:1", "2026-08-15T16:05:00Z"),
+            wait_event("reg:sms-1", "sms_inbound", "evt:2", "2026-08-15T16:06:00Z"),
+            wait_event("reg:sms-1", "sms_inbound", "evt:3", "2026-08-15T16:07:00Z"),
+        ],
+    };
+    let clock = FakeClock::manual(request.created_at.clone());
+    let inner = ScriptedObserver::new(script, clock.clone());
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let observer = NextCounting {
+        inner: inner.clone(),
+        calls: calls.clone(),
+    };
+    let bursts = Arc::new(Mutex::new(Vec::new()));
+    let (gate_tx, gate_rx) = tokio::sync::oneshot::channel::<()>();
+    let gate_rx = Mutex::new(Some(gate_rx));
+    let policy = CoalescePolicy::new(Duration::from_secs(10));
+    let cancel = Cancel::new();
+    let (end, _) = tokio::join!(
+        run_coalesce(&observer, &clock, &cancel, &set, &request, &policy, {
+            let bursts = bursts.clone();
+            move |burst| {
+                let first = bursts.lock().expect("bursts").is_empty();
+                push_ids(&bursts, &burst);
+                let rx = if first {
+                    gate_rx.lock().expect("gate").take()
+                } else {
+                    None
+                };
+                async move {
+                    if let Some(rx) = rx {
+                        let _ = rx.await;
+                    }
+                    Ok(())
+                }
+            }
+        }),
+        async {
+            pump(&clock, "2026-08-15T16:05:00Z").await;
+            while bursts.lock().expect("bursts").is_empty() {
+                tokio::task::yield_now().await;
+            }
+            assert_eq!(bursts.lock().expect("bursts").len(), 1);
+            // Advance the clock past the next events: backpressure must hold
+            // `next` until the first `on_burst` returns Ok.
+            pump(&clock, "2026-08-15T16:06:00Z").await;
+            pump(&clock, "2026-08-15T16:07:00Z").await;
+            tokio::task::yield_now().await;
+            assert_eq!(
+                calls.lock().expect("calls").len(),
+                1,
+                "next must stay parked while the first on_burst is pending"
+            );
+            assert_eq!(inner.live_bind_count(), 1);
+            let _ = gate_tx.send(());
+            while bursts.lock().expect("bursts").len() < 3 {
+                tokio::task::yield_now().await;
+            }
+            pump(&clock, "2026-08-15T16:20:00Z").await;
+        }
+    );
+    let end = end.expect("coalesce");
+    assert_eq!(end, FollowEnd::Deadline);
+    assert_eq!(
+        ids(&bursts),
+        vec![
+            vec!["evt:1".to_string()],
+            vec!["evt:2".to_string()],
+            vec!["evt:3".to_string()],
+        ]
+    );
+    // Three emissions drove three `next` calls; the runner polls `next` once
+    // more to discover Idle and reach the deadline, so the total is four.
+    assert_eq!(calls.lock().expect("calls").len(), 4);
+    assert_eq!(inner.live_bind_count(), 0);
+}

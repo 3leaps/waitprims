@@ -46,7 +46,7 @@ fn missing_entry_schema_fails_closed() {
 }
 
 #[test]
-fn pin_md_records_sha_and_uncut_release() {
+fn pin_md_records_sha_and_release_version() {
     let pin = fs::read_to_string(vendor_root().join("PIN.md")).expect("PIN.md");
     assert!(pin.contains(PINNED_CRUCIBLE_SHA));
     assert!(pin.contains("2026-08-20"));
