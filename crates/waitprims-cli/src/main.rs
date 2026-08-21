@@ -441,14 +441,14 @@ fn parse_duration(raw: &str) -> Result<Duration, Error> {
         .trim()
         .parse()
         .map_err(|_| ValidationError::new("/min_emit_interval", "invalid_duration"))?;
-    let secs = match unit {
-        0 => value / 1000,
-        1 => value,
-        2 => value.saturating_mul(60),
-        3 => value.saturating_mul(3600),
+    match unit {
+        // Preserve sub-second precision for `ms`; do not truncate to seconds.
+        0 => Ok(Duration::from_millis(value)),
+        1 => Ok(Duration::from_secs(value)),
+        2 => Ok(Duration::from_secs(value.saturating_mul(60))),
+        3 => Ok(Duration::from_secs(value.saturating_mul(3600))),
         _ => unreachable!(),
-    };
-    Ok(Duration::from_secs(secs))
+    }
 }
 
 fn print_contract() -> Result<(), Error> {
@@ -611,8 +611,31 @@ fn read_raw(path: &Path) -> Result<String, waitprims_core::Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::{looks_like_uri, reject_non_local_path};
+    use super::{looks_like_uri, parse_duration, reject_non_local_path};
     use std::path::Path;
+
+    #[test]
+    fn millisecond_duration_is_preserved_not_truncated() {
+        use std::time::Duration;
+        assert_eq!(
+            parse_duration("500ms").expect("500ms"),
+            Duration::from_millis(500)
+        );
+        assert_eq!(
+            parse_duration("1500ms").expect("1500ms"),
+            Duration::from_millis(1500)
+        );
+        assert_eq!(parse_duration("1s").expect("1s"), Duration::from_secs(1));
+        assert_eq!(parse_duration("10").expect("10"), Duration::from_secs(10));
+        assert_eq!(parse_duration("2m").expect("2m"), Duration::from_secs(120));
+        assert_eq!(parse_duration("1h").expect("1h"), Duration::from_secs(3600));
+    }
+
+    #[test]
+    fn invalid_duration_is_rejected() {
+        assert!(parse_duration("abc").is_err());
+        assert!(parse_duration("12x").is_err());
+    }
 
     #[test]
     fn ordinary_paths_are_local() {
