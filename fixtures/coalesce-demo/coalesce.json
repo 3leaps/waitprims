@@ -1,0 +1,58 @@
+{
+  "events": [
+    {
+      "event_id": "evt:quiet-1",
+      "method_id": "sms_inbound",
+      "subject_kind": "inbox",
+      "subject_id": "inbox:sms-1",
+      "occurred_at": "2026-08-15T16:05:00Z",
+      "payload": {
+        "payload_ref": "msg:quiet-payload-1",
+        "content_digest": {
+          "algorithm": "sha256",
+          "value": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      },
+      "registration_id": "reg:sms-1",
+      "source_instance_ref": "source:provider-a",
+      "observed_at": "2026-08-15T16:05:00Z",
+      "start_anchor": {
+        "kind": "provider_opaque",
+        "value": "anc:cursor-0"
+      },
+      "proposed_next_anchor": {
+        "kind": "provider_opaque",
+        "value": "anc:after-quiet-1"
+      },
+      "replay_status": "fresh",
+      "correlation_id": "corr:aw-coalesce-1"
+    },
+    {
+      "event_id": "evt:urgent-1",
+      "method_id": "sms_inbound",
+      "subject_kind": "inbox",
+      "subject_id": "inbox:urgent-1",
+      "occurred_at": "2026-08-15T16:15:00Z",
+      "payload": {
+        "payload_ref": "msg:urgent-payload-1",
+        "content_digest": {
+          "algorithm": "sha256",
+          "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      },
+      "registration_id": "reg:urgent-1",
+      "source_instance_ref": "source:provider-a",
+      "observed_at": "2026-08-15T16:15:00Z",
+      "start_anchor": {
+        "kind": "provider_opaque",
+        "value": "anc:cursor-0"
+      },
+      "proposed_next_anchor": {
+        "kind": "provider_opaque",
+        "value": "anc:after-urgent-1"
+      },
+      "replay_status": "fresh",
+      "correlation_id": "corr:aw-coalesce-1"
+    }
+  ]
+}

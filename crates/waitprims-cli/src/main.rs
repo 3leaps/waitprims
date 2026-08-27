@@ -10,9 +10,13 @@ use std::process::ExitCode;
 
 mod diagnostic;
 
+use std::time::Duration;
+
 use clap::{Parser, Subcommand, ValueEnum};
 use tracing::info;
-use waitprims_async::{run_first_match, run_follow, run_poll_cycle, Cancel};
+use waitprims_async::{
+    run_coalesce, run_first_match, run_follow, run_poll_cycle, Cancel, CoalescePolicy,
+};
 use waitprims_core::{
     bundled_entry_schema, bundled_message_schema, validate_message, validate_raw_documents,
     AgentWaitMessage, Error, LiveWaitRequest, MessageType, PollCycleRequest, RegistrationSet,
@@ -82,6 +86,24 @@ enum Command {
         /// Local scripted events JSON file.
         #[arg(long, value_name = "PATH")]
         script: PathBuf,
+    },
+    /// Replay a scripted held-coalesce session.
+    Coalesce {
+        /// Admitted `registration_set` JSON file.
+        #[arg(long, value_name = "PATH")]
+        registration_set: PathBuf,
+        /// Admitted `live_wait_request` JSON file.
+        #[arg(long, value_name = "PATH")]
+        request: PathBuf,
+        /// Local scripted events JSON file.
+        #[arg(long, value_name = "PATH")]
+        script: PathBuf,
+        /// Minimum gap between quiet emits.
+        #[arg(long, value_name = "DURATION")]
+        min_emit_interval: Option<String>,
+        /// Effective priority at or above this flushes immediately (0-255).
+        #[arg(long, value_name = "0-255")]
+        urgent_at: Option<u8>,
     },
     /// Print the compiled contract pin.
     Contract,
@@ -195,6 +217,25 @@ Diagnostic CLI. The library is the product; there is no daemon.",
             Ok(()) => ExitCode::SUCCESS,
             Err(err) => {
                 eprintln!("waitprims follow: {err}");
+                ExitCode::from(1)
+            }
+        },
+        Some(Command::Coalesce {
+            registration_set,
+            request,
+            script,
+            min_emit_interval,
+            urgent_at,
+        }) => match run_held_coalesce(
+            &registration_set,
+            &request,
+            &script,
+            min_emit_interval.as_deref(),
+            urgent_at,
+        ) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("waitprims coalesce: {err}");
                 ExitCode::from(1)
             }
         },
@@ -326,6 +367,88 @@ fn run_held_follow(set_path: &Path, request_path: &Path, script_path: &Path) -> 
     })?;
     sink.emit_end(&end)?;
     Ok(())
+}
+
+fn run_held_coalesce(
+    set_path: &Path,
+    request_path: &Path,
+    script_path: &Path,
+    min_emit_interval: Option<&str>,
+    urgent_at: Option<u8>,
+) -> Result<(), Error> {
+    reject_non_local_path(set_path)?;
+    reject_non_local_path(request_path)?;
+    reject_non_local_path(script_path)?;
+    let set_raw = read_raw(set_path)?;
+    let request_raw = read_raw(request_path)?;
+    let admitted = validate_raw_documents([&set_raw, &request_raw])?;
+    let (set, request) = take_set_and_request(admitted)?;
+    let script_raw = read_raw(script_path)?;
+    let script = Script::from_json(&script_raw)?;
+    reject_unknown_registrations(&set, &script)?;
+    let mut policy = match min_emit_interval {
+        Some(raw) => CoalescePolicy::new(parse_duration(raw)?),
+        None => CoalescePolicy::new(Duration::from_secs(10)),
+    };
+    if let Some(at) = urgent_at {
+        policy.urgent_at = at;
+    }
+    info!("running scripted coalesce");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .map_err(|_| Error::Contract {
+            path: "runtime",
+            constraint: "init",
+        })?;
+    let mut sink = diagnostic::JsonlSink::new(std::io::stdout());
+    let end = runtime.block_on(async {
+        let clock = FakeClock::auto(request.created_at.clone());
+        let observer = ScriptedObserver::new(script, clock.clone());
+        let cancel = Cancel::new();
+        run_coalesce(
+            &observer,
+            &clock,
+            &cancel,
+            &set,
+            &request,
+            &policy,
+            |burst| {
+                let result = sink.emit_coalesce_burst(&burst);
+                async move { result }
+            },
+        )
+        .await
+    })?;
+    sink.emit_end(&end)?;
+    Ok(())
+}
+
+fn parse_duration(raw: &str) -> Result<Duration, Error> {
+    let body = raw.trim();
+    let (amount, unit) = if let Some(rest) = body.strip_suffix("ms") {
+        (rest, 0)
+    } else if let Some(rest) = body.strip_suffix('s') {
+        (rest, 1)
+    } else if let Some(rest) = body.strip_suffix('m') {
+        (rest, 2)
+    } else if let Some(rest) = body.strip_suffix('h') {
+        (rest, 3)
+    } else {
+        (body, 1)
+    };
+    let value: u64 = amount
+        .trim()
+        .parse()
+        .map_err(|_| ValidationError::new("/min_emit_interval", "invalid_duration"))?;
+    match unit {
+        // Preserve sub-second precision for `ms`; do not truncate to seconds.
+        0 => Ok(Duration::from_millis(value)),
+        1 => Ok(Duration::from_secs(value)),
+        2 => Ok(Duration::from_secs(value.saturating_mul(60))),
+        3 => Ok(Duration::from_secs(value.saturating_mul(3600))),
+        _ => unreachable!(),
+    }
 }
 
 fn print_contract() -> Result<(), Error> {
@@ -488,8 +611,31 @@ fn read_raw(path: &Path) -> Result<String, waitprims_core::Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::{looks_like_uri, reject_non_local_path};
+    use super::{looks_like_uri, parse_duration, reject_non_local_path};
     use std::path::Path;
+
+    #[test]
+    fn millisecond_duration_is_preserved_not_truncated() {
+        use std::time::Duration;
+        assert_eq!(
+            parse_duration("500ms").expect("500ms"),
+            Duration::from_millis(500)
+        );
+        assert_eq!(
+            parse_duration("1500ms").expect("1500ms"),
+            Duration::from_millis(1500)
+        );
+        assert_eq!(parse_duration("1s").expect("1s"), Duration::from_secs(1));
+        assert_eq!(parse_duration("10").expect("10"), Duration::from_secs(10));
+        assert_eq!(parse_duration("2m").expect("2m"), Duration::from_secs(120));
+        assert_eq!(parse_duration("1h").expect("1h"), Duration::from_secs(3600));
+    }
+
+    #[test]
+    fn invalid_duration_is_rejected() {
+        assert!(parse_duration("abc").is_err());
+        assert!(parse_duration("12x").is_err());
+    }
 
     #[test]
     fn ordinary_paths_are_local() {
