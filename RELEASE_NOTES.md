@@ -8,17 +8,37 @@
 
 ---
 
-## v0.2.1 — unreleased
+## v0.2.1 — 2026-08-27
 
-Adds `run_coalesce` on the unreleased 0.2.0 inert-priority pin.
-Not a 0.1.x patch. No public tag yet.
+Held-follow and held-coalesce runners, deterministic diagnostic demos,
+and the updated `agent-wait/v0` contract pin.
 
----
+There is no v0.2.0 tag: its inert priority field landed in the same
+squash commit as v0.2.1 and is included in this release.
 
-## v0.2.0 — unreleased
+### Highlights
 
-Local cut. Source-breaking optional `registration.priority` (inert).
-Not a 0.1.x patch. Presentation hint, not authorization. No public tag yet.
+- `run_follow` binds once and emits runtime-only `FollowBurst` values
+  until a runtime-only `FollowEnd`.
+- `run_coalesce` adds quiet-window coalescing and priority-triggered
+  emission while preserving Observer custody and backpressure.
+- Optional `registration.priority` is a presentation hint, not
+  authorization. Omitted and explicit 50 remain digest-distinct.
+- Diagnostic `follow` and `coalesce` commands use local scripted
+  observers and emit diagnostic JSONL without adding a public wire kind.
+- Coalescing proofs cover overflow custody, sink failures, ordering,
+  quiet liveness, and held-bind backpressure.
+- The pinned `agent-wait/v0` contract is Crucible `v0.1.28`
+  (`4bc95146…`).
+
+### Upgrade notes
+
+- The three library crates move from 0.1.3 to 0.2.1.
+- `waitprims-cli` remains unpublished.
+- Public JSON remains exactly the six `agent-wait/v0` message kinds.
+- Git users should pin `v0.2.1`; there is no `v0.2.0` tag.
+
+Full notes: [docs/releases/v0.2.1.md](docs/releases/v0.2.1.md)
 
 ---
 

@@ -12,29 +12,24 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
-## [0.2.1]
+## [0.2.1] - 2026-08-27
 
-Unreleased local cut. Adds `run_coalesce` on the 0.2.0 inert-priority pin.
-Not a `0.1.x` patch.
-
-- `run_coalesce` with runtime-only `CoalescePolicy` / `CoalesceBurst`;
-  quiet cadence is clock time at first quiet arrival, then
-  `emit + min_emit_interval`
+- Pin `contract: agent-wait/v0` at Crucible `v0.1.28` (`4bc95146…`)
+- Add optional `Registration.priority: Option<u8>` as a presentation
+  hint; omitted and explicit 50 remain digest-distinct
+- Add `run_follow` with runtime-only `FollowBurst` / `FollowEnd`
+- Add `run_coalesce` with runtime-only `CoalescePolicy` /
+  `CoalesceBurst`; quiet cadence is clock time at first quiet arrival,
+  then `emit + min_emit_interval`
+- Add deterministic diagnostic `follow` and `coalesce` CLI commands
+  with offline demo fixtures
+- Extend coalescing proofs for overflow custody, sink failures,
+  ordering, quiet liveness, and held-bind backpressure
 
 ## [0.2.0]
 
-Unreleased local cut. Source-breaking optional `registration.priority`
-is inert on first-match, poll-cycle, and `run_follow`. Not a `0.1.x`
-patch. `priority` is a presentation hint, not authorization.
-
-- Pin `contract: agent-wait/v0` at Crucible `v0.1.28` (`4bc95146…`)
-- Optional `Registration.priority: Option<u8>` (skip-none). Omitted and
-  explicit 50 stay digest-distinct. first-match, poll-cycle, and
-  `run_follow` do not read it
-- `run_follow` held-follow runner: bind once, emit `FollowBurst`, stop
-  on runtime-only `FollowEnd`. No new `agent-wait/v0` kind
-- Follow lease posture rejects at `now >= lease_expires_at`. First-match
-  still uses `now >`
+No public release or tag. The inert `registration.priority` field
+landed in the same squash commit as 0.2.1 and is included in 0.2.1.
 
 ## [0.1.3] - 2026-08-18
 
@@ -98,8 +93,7 @@ APIs may still move.
   same-repo only)
 
 [Unreleased]: https://github.com/3leaps/waitprims/compare/v0.2.1...HEAD
-[0.2.1]: https://github.com/3leaps/waitprims/compare/v0.2.0...HEAD
-[0.2.0]: https://github.com/3leaps/waitprims/compare/v0.1.3...HEAD
+[0.2.1]: https://github.com/3leaps/waitprims/compare/v0.1.3...v0.2.1
 [0.1.3]: https://github.com/3leaps/waitprims/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/3leaps/waitprims/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/3leaps/waitprims/compare/v0.1.0...v0.1.1
