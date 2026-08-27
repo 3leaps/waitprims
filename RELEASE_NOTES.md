@@ -92,21 +92,3 @@ does not publish to crates.io or change repository visibility.
   still drafts an unsigned GitHub release.
 
 Full notes: [docs/releases/v0.1.2.md](docs/releases/v0.1.2.md)
-
----
-
-## v0.1.1 — 2026-08-18
-
-Signed-release kit. No library API change is intended.
-
-### Highlights
-
-- `VERSION` is the version SSOT (`make version-sync`, `make version-check`).
-- Makefile release targets and `scripts/` for download, checksums, MFA
-  sign, verify, and upload.
-- Draft GitHub release workflow on `v*` tags: CLI archives for the five
-  smoked platforms, SBOM, `LICENSE-MIT`, `LICENSE-APACHE`.
-- `make release-check` packages the workspace and does not run
-  `cargo publish`. `publish` stays `false`.
-
-Full notes: [docs/releases/v0.1.1.md](docs/releases/v0.1.1.md)
