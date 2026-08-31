@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/waitprims-core",
     "crates/waitprims-async",
+    "crates/waitprims-fs",
     "crates/waitprims-testkit",
     "crates/waitprims-cli",
 ]
@@ -20,6 +21,7 @@ publish = false
 [workspace.dependencies]
 waitprims-core = { version = "0.2.1", path = "crates/waitprims-core" }
 waitprims-async = { version = "0.2.1", path = "crates/waitprims-async" }
+waitprims-fs = { version = "0.2.1", path = "crates/waitprims-fs" }
 waitprims-testkit = { version = "0.2.1", path = "crates/waitprims-testkit" }
 
 serde = { version = "1.0", features = ["derive"] }
@@ -31,6 +33,7 @@ ryu-js = "1.0"
 jsonschema = { version = "0.30", default-features = false }
 
 tokio = { version = "1", default-features = false, features = ["rt", "time", "macros", "sync"] }
+notify = { version = "=8.2.0", features = ["macos_kqueue"] }
 
 clap = { version = "4.5", features = ["derive"] }
 tracing = "0.1"
