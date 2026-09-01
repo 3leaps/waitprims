@@ -35,12 +35,10 @@ jobs:
         id: version
         run: |
           set -euo pipefail
+          WAITPRIMS_RELEASE_TAG="$GITHUB_REF_NAME" \
+            WAITPRIMS_REQUIRE_TAG=1 \
+            ./scripts/release-guard-tag-version.sh
           FILE_VERSION=$(tr -d ' \t\r\n' < VERSION)
-          TAG_VERSION=${GITHUB_REF_NAME#v}
-          if [ "$FILE_VERSION" != "$TAG_VERSION" ]; then
-            echo "VERSION mismatch: file=$FILE_VERSION tag=$TAG_VERSION"
-            exit 1
-          fi
           echo "version=$FILE_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Check version consistency
@@ -235,6 +233,8 @@ jobs:
             | Windows x64 | `waitprims-*-windows-amd64.zip` |
             | Windows arm64 | `waitprims-*-windows-arm64.zip` |
 
-            Workspace `publish` is false; three library crates opt in.
+            Workspace `publish` is false; four library crates opt in:
+            `waitprims-core`, `waitprims-async`, `waitprims-testkit`,
+            and `waitprims-fs`.
             The diagnostic CLI is unpublished. This workflow does not
             run `cargo publish`.

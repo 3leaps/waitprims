@@ -33,7 +33,7 @@ if [ -n "$MINISIGN_PUB" ] && [ -f "$MINISIGN_PUB" ]; then
 	cat "$DIR/waitprims-minisign.pub"
 else
 	echo "[!!] Minisign public key not found"
-	echo "Set WAITPRIMS_MINISIGN_PUB or ensure .pub file exists alongside .key"
+	echo "Load the secure release-signing environment and retry"
 fi
 
 if [ -n "${WAITPRIMS_PGP_KEY_ID:-}" ]; then

@@ -149,7 +149,7 @@ while IFS= read -r line; do
 		error "  $line"
 		DEP_MISMATCH=1
 	fi
-done < <(grep -E '^waitprims-(core|async|testkit) = \{ version = "' "$CARGO_TOML" || true)
+done < <(grep -E '^waitprims-(core|async|testkit|fs) = \{ version = "' "$CARGO_TOML" || true)
 
 if [[ "$DEP_MISMATCH" -ne 0 ]]; then
 	error "Run 'make version-sync' to sync path-dependency versions"

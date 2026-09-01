@@ -8,7 +8,7 @@
 set -euo pipefail
 
 DIR=${1:-dist/release}
-TAG=${2:-${WAITPRIMS_RELEASE_TAG:-}}
+TAG=${2:-${WAITPRIMS_RELEASE_TAG:-${WAITPRIMS_RELEASE_KEY:-}}}
 
 if [ ! -d "$DIR" ]; then
 	echo "Error: Directory $DIR does not exist"
@@ -16,11 +16,11 @@ if [ ! -d "$DIR" ]; then
 fi
 
 if [ -z "$TAG" ] || [ "$TAG" = "v" ]; then
-	echo "Error: No release tag. Pass the tag or set WAITPRIMS_RELEASE_TAG=vX.Y.Z"
+	echo "Error: No release tag. Pass the tag or load the release environment"
 	exit 1
 fi
 
-VERSION="${TAG#v}"
+RELEASE_VERSION="${TAG#v}"
 NOTES="release-notes-${TAG}.md"
 
 cd "$DIR"
@@ -37,9 +37,9 @@ echo "Generating checksums in $DIR for $TAG..."
 CHECKSUM_FILES=()
 for f in LICENSE-* \
 	"$NOTES" \
-	"sbom-${VERSION}.cdx.json" \
-	"waitprims-${VERSION}-"*.tar.gz \
-	"waitprims-${VERSION}-"*.zip; do
+	"sbom-${RELEASE_VERSION}.cdx.json" \
+	"waitprims-${RELEASE_VERSION}-"*.tar.gz \
+	"waitprims-${RELEASE_VERSION}-"*.zip; do
 	if [ -f "$f" ]; then
 		CHECKSUM_FILES+=("$f")
 	fi

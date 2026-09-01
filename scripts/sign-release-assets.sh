@@ -20,14 +20,12 @@ fi
 
 if [ -z "${WAITPRIMS_MINISIGN_KEY:-}" ]; then
 	echo "Error: WAITPRIMS_MINISIGN_KEY environment variable not set"
-	echo ""
-	echo "Set to path of your minisign secret key:"
-	echo "  export WAITPRIMS_MINISIGN_KEY=/path/to/signing.key"
+	echo "Load the secure release-signing environment and retry."
 	exit 1
 fi
 
 if [ ! -f "$WAITPRIMS_MINISIGN_KEY" ]; then
-	echo "Error: Minisign key not found: $WAITPRIMS_MINISIGN_KEY"
+	echo "Error: Configured minisign key is not a readable file"
 	exit 1
 fi
 
