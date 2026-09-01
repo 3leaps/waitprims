@@ -7,8 +7,9 @@ repository.workspace = true
 homepage.workspace = true
 authors.workspace = true
 rust-version.workspace = true
-publish = false
+publish = true
 description = "Native filesystem Observer for waitprims"
+documentation = "https://docs.rs/waitprims-fs"
 readme = "README.md"
 
 [dependencies]

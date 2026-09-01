@@ -2,6 +2,10 @@
 
 Native local-filesystem wait arm for `waitprims`.
 
+```toml
+waitprims-fs = "0.2"
+```
+
 This crate implements the existing `waitprims_async::Observer` seam with
 `notify`'s native `RecommendedWatcher`. It is not a daemon, a shell-style
 watch command, a durable event ledger, or a polling fallback.

@@ -128,9 +128,10 @@ verifies local tarballs. That is **not** a registry upload.
 | `waitprims-core` | yes (first) |
 | `waitprims-async` | yes (after core is on the index) |
 | `waitprims-testkit` | yes (after async is on the index) |
+| `waitprims-fs` | yes (after testkit; name-slot check first) |
 | `waitprims-cli` | **never** (`publish = false`) |
 
-Workspace `publish` stays `false`. The three libraries opt in.
+Workspace `publish` stays `false`. The four libraries opt in.
 
 ### First cut vs later cuts
 
@@ -146,7 +147,7 @@ Workspace `publish` stays `false`. The three libraries opt in.
 
 ### Tokens (OOB)
 
-Use a crates.io token scoped to the three library crate names. Do
+Use a crates.io token scoped to the four library crate names. Do
 not reuse a Fulmen / other-org token.
 
 | Token | Endpoint scopes | When |
@@ -173,10 +174,20 @@ cargo publish -p waitprims-async
 cargo info --registry crates-io "waitprims-async@${VERSION}"
 cargo publish --dry-run -p waitprims-testkit
 cargo publish -p waitprims-testkit
+cargo info --registry crates-io "waitprims-testkit@${VERSION}"
+cargo info --registry crates-io waitprims-fs
+# For the first waitprims-fs upload, confirm the name is still unclaimed.
+cargo publish --dry-run -p waitprims-fs
+cargo publish -p waitprims-fs
+cargo info --registry crates-io "waitprims-fs@${VERSION}"
 ```
 
 - [ ] Dry-run then publish **core**, wait for the index, then **async**,
-      wait for the index, then **testkit**
+      wait for the index, then **testkit**, wait for the index, then
+      name-slot check and publish **fs**
+- [ ] Immediately before the first `waitprims-fs` publish, run
+      `cargo info --registry crates-io waitprims-fs` and confirm the
+      crate name is still unclaimed. Stop if it resolves to another owner.
 - [ ] Do **not** `cargo publish -p waitprims-cli` (must fail closed:
       `cannot be published`)
 - [ ] Confirm each predecessor with
@@ -198,7 +209,10 @@ cargo publish --dry-run -p waitprims-cli
 Consumers can replace a git tag pin with:
 
 ```toml
-waitprims-async = "0.1"
+waitprims-core = "0.2"
+waitprims-async = "0.2"
+waitprims-testkit = "0.2"
+waitprims-fs = "0.2"
 ```
 
 docs.rs builds from the crates.io tarball. Evergreen README install
@@ -323,7 +337,7 @@ gh release edit v$(cat VERSION) --draft=false
 - [ ] Verify signatures with public keys
 - [ ] After a crates.io cue: each library crate has this VERSION
       (`cargo info --registry crates-io waitprims-core@${VERSION}`,
-      same for async and testkit). Bare `cargo info` can resolve the
+      same for async, testkit, and fs). Bare `cargo info` can resolve the
       workspace and is not an index proof. Search is not a
       version-history proof; no-backfill is policy (section 2).
 

@@ -4,7 +4,7 @@ Deterministic test helpers for waitprims: a logical `FakeClock` and
 scripted observers. Proofs stay off the network.
 
 ```toml
-waitprims-testkit = "0.1"
+waitprims-testkit = "0.2"
 ```
 
 Depends on [`waitprims-core`](https://crates.io/crates/waitprims-core)

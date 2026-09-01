@@ -55,6 +55,7 @@ silently advance cursors.
 | ----- | ---- |
 | `waitprims-core` | Types, errors, validation, digest and time helpers |
 | `waitprims-async` | First-match, poll-cycle, and held-follow runners |
+| `waitprims-fs` | Native local-filesystem observer |
 | `waitprims-testkit` | Fake clock and scripted observers |
 | `waitprims-cli` | Diagnostic CLI (`waitprims`); not on crates.io |
 
@@ -64,9 +65,10 @@ This cut enables crates.io for the library crates. After that
 publication, depend with:
 
 ```toml
-waitprims-core = "0.1"
-waitprims-async = "0.1"
-waitprims-testkit = "0.1"
+waitprims-core = "0.2"
+waitprims-async = "0.2"
+waitprims-fs = "0.2"
+waitprims-testkit = "0.2"
 ```
 
 Until then, pin a git tag. The diagnostic CLI is not published. APIs
@@ -94,7 +96,7 @@ gate. Fork PRs do not run the arm64 cells. See
 `make precommit` is fmt-check and clippy. `make prepush` adds locked
 tests and version-check. `make pr-final` also runs `make demo-follow`.
 `make release-check` packages the workspace (`cargo package --workspace`)
-and publishes none. Only the three library crates are publishable.
+and publishes none. Only the four library crates are publishable.
 See [`RELEASE_CHECKLIST.md`](RELEASE_CHECKLIST.md) for the later signed
 GitHub release flow.
 
