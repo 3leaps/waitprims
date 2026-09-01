@@ -11,7 +11,9 @@ committed `.a`. CI never holds signing keys.
 
 - GPG and minisign installed
 - Signing keys configured (shared 3leaps release signing keys)
-- `WAITPRIMS_*` environment variables set (see step 2)
+- Secure release environment loaded (see section 3). Required:
+  `WAITPRIMS_RELEASE_KEY`, `WAITPRIMS_MINISIGN_KEY`, and
+  `WAITPRIMS_MINISIGN_PUB`; PGP variables are optional
 - `gh` CLI authenticated with push access
 
 ## 1. Write / prep
@@ -89,20 +91,26 @@ One annotated `v*` tag. Do not add a path-prefixed module tag.
 - [ ] Create the annotated tag:
 
   ```bash
-  VERSION=$(cat VERSION)
-  git tag -a "v${VERSION}" -m "v${VERSION}: <brief description of release>"
+  : "${WAITPRIMS_RELEASE_KEY:?load the release environment}"
+  WAITPRIMS_RELEASE_TAG="$WAITPRIMS_RELEASE_KEY" make release-guard-tag-version
+  git tag -a "$WAITPRIMS_RELEASE_KEY" \
+    -m "$WAITPRIMS_RELEASE_KEY: <brief description of release>"
   ```
 
 - [ ] Push the tag (triggers the release workflow):
 
   ```bash
-  git push origin "v${VERSION}"
+  git push origin "$WAITPRIMS_RELEASE_KEY"
   ```
+
+  `WAITPRIMS_RELEASE_KEY` is already the canonical `vX.Y.Z` tag. Do not
+  copy it into a generic `VERSION` environment variable and do not prepend
+  another `v`.
 
 ### CI verification on the tag
 
 - [ ] Required **CI** workflow on the tag is green
-      (`gh run list --branch "v${VERSION}"`)
+      (`gh run list --branch "$WAITPRIMS_RELEASE_KEY"`)
 - [ ] The **Release** workflow drafts the GitHub release. On MSRV,
       `cargo package --workspace` cannot prepare dependents until
       this `VERSION` of `waitprims-core` is on crates.io. If Package
@@ -145,7 +153,7 @@ Workspace `publish` stays `false`. The four libraries opt in.
   Still publish **after the tag**, so the registry version matches
   the git tag.
 
-### Tokens (OOB)
+### Tokens
 
 Use a crates.io token scoped to the four library crate names. Do
 not reuse a Fulmen / other-org token.
@@ -156,31 +164,38 @@ not reuse a Fulmen / other-org token.
 | update only | `publish-update` | later versions of crates that already exist |
 
 No `yank` unless a separate playbook says so. Expiry 30–90 days.
-Store as `CARGO_REGISTRY_TOKEN_3LEAPS` (or a `_NEW` sibling) in
-the org OOB secret store — not in this repo.
+Store as `CARGO_REGISTRY_TOKEN_3LEAPS` (or a `_NEW` sibling) in a
+secure external secret store — not in this repo.
 
 ### Publish steps (cued)
 
 From a clean checkout of the **tag** (not a dirty worktree):
 
 ```bash
-VERSION=$(cat VERSION)
-git checkout "v${VERSION}"
+: "${WAITPRIMS_RELEASE_KEY:?load the release environment}"
+git checkout "$WAITPRIMS_RELEASE_KEY"
+release_version=$(tr -d ' \t\r\n' < VERSION)
+WAITPRIMS_REQUIRE_TAG=1 make release-guard-tag-version
 cargo publish --dry-run -p waitprims-core
 cargo publish -p waitprims-core
-cargo info --registry crates-io "waitprims-core@${VERSION}"
+cargo info --registry crates-io "waitprims-core@${release_version}"
 cargo publish --dry-run -p waitprims-async
 cargo publish -p waitprims-async
-cargo info --registry crates-io "waitprims-async@${VERSION}"
+cargo info --registry crates-io "waitprims-async@${release_version}"
 cargo publish --dry-run -p waitprims-testkit
 cargo publish -p waitprims-testkit
-cargo info --registry crates-io "waitprims-testkit@${VERSION}"
+cargo info --registry crates-io "waitprims-testkit@${release_version}"
 cargo info --registry crates-io waitprims-fs
 # For the first waitprims-fs upload, confirm the name is still unclaimed.
 cargo publish --dry-run -p waitprims-fs
 cargo publish -p waitprims-fs
-cargo info --registry crates-io "waitprims-fs@${VERSION}"
+cargo info --registry crates-io "waitprims-fs@${release_version}"
 ```
+
+Each `cargo publish` is a separate irreversible gate. Reconfirm the current
+authorization immediately before every upload. A later stop or hold supersedes
+an earlier cue; do not continue merely because the whole sequence was
+previously authorized.
 
 - [ ] Dry-run then publish **core**, wait for the index, then **async**,
       wait for the index, then **testkit**, wait for the index, then
@@ -191,7 +206,7 @@ cargo info --registry crates-io "waitprims-fs@${VERSION}"
 - [ ] Do **not** `cargo publish -p waitprims-cli` (must fail closed:
       `cannot be published`)
 - [ ] Confirm each predecessor with
-      `cargo info --registry crates-io <crate>@${VERSION}`
+      `cargo info --registry crates-io <crate>@<version>`
       before the next publish. Bare `cargo info` can hit the local
       workspace and is not an index proof.
 - [ ] If the tag Release workflow failed Package Check, re-run it
@@ -226,13 +241,21 @@ text becomes true only after this step.
 
 ### Set environment variables
 
+Load the operator's secure release environment. This repository intentionally
+does not prescribe host-local secret paths. Confirm presence without printing
+values:
+
 ```bash
-export WAITPRIMS_RELEASE_TAG=v$(cat VERSION)
-export WAITPRIMS_MINISIGN_KEY=/path/to/signing.key
-export WAITPRIMS_MINISIGN_PUB=/path/to/signing.pub
-export WAITPRIMS_PGP_KEY_ID="keyid!"
-export WAITPRIMS_GPG_HOMEDIR=/path/to/gpg/homedir  # optional
+: "${WAITPRIMS_RELEASE_KEY:?missing approved release key}"
+: "${WAITPRIMS_MINISIGN_KEY:?missing approved minisign secret key}"
+: "${WAITPRIMS_MINISIGN_PUB:?missing approved minisign public key}"
+WAITPRIMS_REQUIRE_TAG=1 make release-guard-tag-version
 ```
+
+`WAITPRIMS_RELEASE_KEY` is the canonical `vX.Y.Z` tag and is consumed directly
+by the Makefile. `WAITPRIMS_PGP_KEY_ID` and `WAITPRIMS_GPG_HOMEDIR` are
+optional. Never paste environment values or signing-command transcripts into
+issues, pull requests, or chat.
 
 ### Signing steps
 
@@ -272,13 +295,14 @@ export WAITPRIMS_GPG_HOMEDIR=/path/to/gpg/homedir  # optional
    SBOM, licenses, and `release-notes-vX.Y.Z.md`. Leftover files from
    an earlier cut are omitted and reported.
 
-5. **Sign checksum manifests** (minisign + PGP)
+5. **Sign checksum manifests** (minisign, plus PGP when configured)
 
    ```bash
    make release-sign
    ```
 
-   Produces: `.minisig` and `.asc` signatures for both checksum files
+   Produces `.minisig` signatures for both checksum files. When
+   `WAITPRIMS_PGP_KEY_ID` is configured, also produces `.asc` signatures.
 
 6. **Export public keys**
 
@@ -286,7 +310,8 @@ export WAITPRIMS_GPG_HOMEDIR=/path/to/gpg/homedir  # optional
    make release-export-keys
    ```
 
-   Produces: `waitprims-minisign.pub`, `waitprims-release-signing-key.asc`
+   Produces `waitprims-minisign.pub` and, when PGP is configured,
+   `waitprims-release-signing-key.asc`.
 
 7. **Verify everything before upload**
 
@@ -312,7 +337,7 @@ export WAITPRIMS_GPG_HOMEDIR=/path/to/gpg/homedir  # optional
 9. **Publish the release** (promotes draft → public):
 
    ```bash
-   gh release edit v$(cat VERSION) --draft=false
+   gh release edit "$WAITPRIMS_RELEASE_KEY" --draft=false
    ```
 
    The release is a draft until this step. Do not announce until after this.
@@ -327,7 +352,7 @@ Or run the full signing + upload workflow in one command:
 ```bash
 make release
 # Then manually publish the draft:
-gh release edit v$(cat VERSION) --draft=false
+gh release edit "$WAITPRIMS_RELEASE_KEY" --draft=false
 ```
 
 ## 4. Post-release verification
@@ -336,7 +361,7 @@ gh release edit v$(cat VERSION) --draft=false
 - [ ] Verify checksums match: download and verify locally
 - [ ] Verify signatures with public keys
 - [ ] After a crates.io cue: each library crate has this VERSION
-      (`cargo info --registry crates-io waitprims-core@${VERSION}`,
+      (`cargo info --registry crates-io waitprims-core@<version>`,
       same for async, testkit, and fs). Bare `cargo info` can resolve the
       workspace and is not an index proof. Search is not a
       version-history proof; no-backfill is policy (section 2).
@@ -344,11 +369,12 @@ gh release edit v$(cat VERSION) --draft=false
 ### Verification example
 
 ```bash
-VERSION=$(cat VERSION)
+: "${WAITPRIMS_RELEASE_KEY:?load the release environment}"
+release_version=${WAITPRIMS_RELEASE_KEY#v}
 
-curl -LO "https://github.com/3leaps/waitprims/releases/download/v${VERSION}/SHA256SUMS"
-curl -LO "https://github.com/3leaps/waitprims/releases/download/v${VERSION}/SHA256SUMS.minisig"
-curl -LO "https://github.com/3leaps/waitprims/releases/download/v${VERSION}/waitprims-minisign.pub"
+curl -LO "https://github.com/3leaps/waitprims/releases/download/${WAITPRIMS_RELEASE_KEY}/SHA256SUMS"
+curl -LO "https://github.com/3leaps/waitprims/releases/download/${WAITPRIMS_RELEASE_KEY}/SHA256SUMS.minisig"
+curl -LO "https://github.com/3leaps/waitprims/releases/download/${WAITPRIMS_RELEASE_KEY}/waitprims-minisign.pub"
 
 shasum -a 256 -c SHA256SUMS --ignore-missing
 minisign -Vm SHA256SUMS -p waitprims-minisign.pub
@@ -391,11 +417,8 @@ the release documentation updates required by the pre-tag gate.
 
 ### "WAITPRIMS_MINISIGN_KEY not set"
 
-Set the environment variable:
-
-```bash
-export WAITPRIMS_MINISIGN_KEY=/path/to/signing.key
-```
+Load the operator's secure release-signing environment. Do not invent or
+publish a host-local key path.
 
 ### "No release notes found"
 

@@ -3,7 +3,7 @@ id: "PDR-0001"
 title: "crates.io after the git tag, before the GitHub Release is green"
 status: "accepted"
 date: "2026-08-18"
-last_updated: "2026-08-18"
+last_updated: "2026-09-01"
 deciders:
   - "@3leapsdave"
 scope: "waitprims release process"
@@ -25,10 +25,10 @@ relates-to:
 
 ## Context
 
-waitprims is a library-first workspace. Three crates opt in to
-crates.io (`waitprims-core`, `waitprims-async`, `waitprims-testkit`).
-The diagnostic CLI stays unpublished. Dependents use `version` +
-`path` so `cargo publish` rewrites them to registry versions.
+waitprims is a library-first workspace. Four crates opt in to
+crates.io (`waitprims-core`, `waitprims-async`, `waitprims-testkit`,
+`waitprims-fs`). The diagnostic CLI stays unpublished. Dependents use
+`version` + `path` so `cargo publish` rewrites them to registry versions.
 
 MSRV is 1.88. On that Cargo, `cargo package --workspace` looks up
 path dependents on crates.io when preparing the next crate. It
@@ -37,7 +37,7 @@ So the tag Release workflow's Package Check fails for a **new**
 version until `waitprims-core@VERSION` exists on the index.
 
 v0.1.3 hit that: the git tag CI was green; Release Package Check
-failed; there was no draft to sign until the three libraries were
+failed; there was no draft to sign until the libraries were
 published and the workflow re-run.
 
 The checklist used to put crates.io **after** MFA sign and undraft.
@@ -46,7 +46,7 @@ That order cannot produce a signable GitHub draft on first upload
 
 ## Decision
 
-1. **Order.** `cargo publish` the three library crates **after**
+1. **Order.** `cargo publish` the four library crates **after**
    the annotated git tag is on `origin`, **before** treating the
    GitHub Release workflow as green. Then MFA-sign and undraft.
    Later cuts may see Package Check pass without a new publish
@@ -57,7 +57,7 @@ That order cannot produce a signable GitHub draft on first upload
    cut that enabled `publish = true`. Older git tags stay off
    crates.io.
 
-3. **Tokens (OOB).** Use the crates.io account that will own the
+3. **Tokens.** Use the crates.io account that will own the
    3leaps crates. Do not reuse another org's token.
 
    | Token role | Scopes | Use |
@@ -65,11 +65,12 @@ That order cannot produce a signable GitHub draft on first upload
    | new + update | `publish-new`, `publish-update` | first upload of a crate name |
    | update only | `publish-update` | later versions of existing crates |
 
-   Restrict both tokens to the three library crate names (add other
+   Restrict both tokens to the four library crate names (add other
    3leaps crate names when those cuts are scheduled). No crate-name
    wildcard exists. No `yank` unless a separate playbook says so.
-   Expiry 30–90 days. Store OOB as `CARGO_REGISTRY_TOKEN_3LEAPS`
-   (and a `_NEW` sibling if you keep both). Never commit a token.
+   Expiry 30–90 days. Store as `CARGO_REGISTRY_TOKEN_3LEAPS`
+   (and a `_NEW` sibling if you keep both) in a secure external
+   secret store. Never commit a token.
 
 4. **Index proof.** After each upload, wait on
    `cargo info --registry crates-io <crate>@VERSION`. Bare
@@ -91,6 +92,7 @@ This is a **PDR** (process), not an ADR. Record types follow
 
 ## Revision History
 
-| Date       | Status Change | Summary                                      | Updated By |
-| ---------- | ------------- | -------------------------------------------- | ---------- |
-| 2026-08-18 | → accepted    | Tag, then crates.io, then GitHub sign/undraft | echo-devlead |
+| Date       | Status Change | Summary                                             | Updated By   |
+| ---------- | ------------- | --------------------------------------------------- | ------------ |
+| 2026-08-18 | → accepted    | Tag, then crates.io, then GitHub sign/undraft       | devlead    |
+| 2026-09-01 | accepted      | Add `waitprims-fs` as the fourth published library | devlead    |

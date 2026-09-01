@@ -31,8 +31,11 @@ VERSION := $(shell tr -d ' \t\r\n' < $(VERSION_FILE) 2>/dev/null || echo dev)
 CARGO = cargo
 
 DIST_RELEASE := dist/release
-# In-tree VERSION is the default tag, not the nearest older git tag.
-WAITPRIMS_RELEASE_TAG ?= v$(VERSION)
+# The operator-provided release key is already a canonical v-prefixed tag. Fall back to
+# the in-tree VERSION when the secure release environment is not loaded.
+WAITPRIMS_RELEASE_KEY ?=
+WAITPRIMS_RELEASE_TAG ?= $(if $(strip $(WAITPRIMS_RELEASE_KEY)),$(strip $(WAITPRIMS_RELEASE_KEY)),v$(VERSION))
+export WAITPRIMS_RELEASE_KEY
 export WAITPRIMS_RELEASE_TAG
 
 WAITPRIMS_MINISIGN_KEY ?=
@@ -100,6 +103,7 @@ check: fmt-check lint test ## Run quality checks
 test: ## Run locked test suite
 	@echo "Running tests..."
 	$(CARGO) test --workspace --locked
+	./scripts/release-guard-tag-version.test.sh
 	@echo "[ok] Tests passed"
 
 fmt: ## Format Rust
@@ -212,7 +216,7 @@ text = p.read_text(); \
 text, n = re.subn(r'(?m)^version = \"[^\"]*\"', 'version = \"%s\"' % ver, text, count=1); \
 if n != 1: \
     raise SystemExit('failed to update [workspace.package] version'); \
-text = re.sub(r'(waitprims-(?:core|async|testkit) = \{ version = )\"[^\"]*\"', r'\1\"%s\"' % ver, text); \
+text = re.sub(r'(waitprims-(?:core|async|testkit|fs) = \{ version = )\"[^\"]*\"', r'\1\"%s\"' % ver, text); \
 p.write_text(text); \
 " "$$ver"; \
 		echo "[ok] Synced Cargo.toml to $$ver (python fallback)"; \
@@ -238,8 +242,10 @@ version-check: ## Validate version consistency across files
 # `make release-export-keys` must not re-clean or re-download.
 #
 # Environment variables:
-#   WAITPRIMS_MINISIGN_KEY  - Path to minisign secret key (required for sign)
-#   WAITPRIMS_MINISIGN_PUB  - Path to minisign public key (optional)
+#   WAITPRIMS_RELEASE_KEY   - Operator-provided release key (v-prefixed tag)
+#   WAITPRIMS_RELEASE_TAG   - Explicit canonical tag override
+#   WAITPRIMS_MINISIGN_KEY  - Approved minisign secret-key locator (required)
+#   WAITPRIMS_MINISIGN_PUB  - Approved minisign public-key locator
 #   WAITPRIMS_PGP_KEY_ID    - PGP key ID for GPG signing (optional)
 #   WAITPRIMS_GPG_HOMEDIR   - Custom GPG home directory (optional)
 #
@@ -341,7 +347,8 @@ release-clean: ## Remove dist/release contents
 
 release-download: ## Download release assets from GitHub
 	@if [ -z "$(WAITPRIMS_RELEASE_TAG)" ] || [ "$(WAITPRIMS_RELEASE_TAG)" = "v" ]; then \
-		echo "Error: No release tag found. Set WAITPRIMS_RELEASE_TAG=vX.Y.Z"; \
+		echo "Error: No release tag found. Load the release environment"; \
+		echo "or set WAITPRIMS_RELEASE_TAG to the canonical v-prefixed tag."; \
 		exit 1; \
 	fi
 	./scripts/download-release-assets.sh $(WAITPRIMS_RELEASE_TAG) $(DIST_RELEASE)
@@ -363,21 +370,19 @@ release-checksums: ## Generate SHA256SUMS and SHA512SUMS
 release-sign: ## Sign checksum manifests (requires WAITPRIMS_MINISIGN_KEY)
 	@if [ -z "$(WAITPRIMS_MINISIGN_KEY)" ]; then \
 		echo "Error: WAITPRIMS_MINISIGN_KEY not set"; \
-		echo ""; \
-		echo "Set the path to your minisign secret key:"; \
-		echo "  export WAITPRIMS_MINISIGN_KEY=/path/to/signing.key"; \
+		echo "Load the secure release-signing environment and retry."; \
 		exit 1; \
 	fi
-	WAITPRIMS_MINISIGN_KEY=$(WAITPRIMS_MINISIGN_KEY) \
-	WAITPRIMS_PGP_KEY_ID=$(WAITPRIMS_PGP_KEY_ID) \
-	WAITPRIMS_GPG_HOMEDIR=$(WAITPRIMS_GPG_HOMEDIR) \
+	@WAITPRIMS_MINISIGN_KEY="$(WAITPRIMS_MINISIGN_KEY)" \
+	WAITPRIMS_PGP_KEY_ID="$(WAITPRIMS_PGP_KEY_ID)" \
+	WAITPRIMS_GPG_HOMEDIR="$(WAITPRIMS_GPG_HOMEDIR)" \
 	./scripts/sign-release-assets.sh $(WAITPRIMS_RELEASE_TAG) $(DIST_RELEASE)
 
 release-export-keys: ## Export public signing keys
-	WAITPRIMS_MINISIGN_KEY=$(WAITPRIMS_MINISIGN_KEY) \
-	WAITPRIMS_MINISIGN_PUB=$(WAITPRIMS_MINISIGN_PUB) \
-	WAITPRIMS_PGP_KEY_ID=$(WAITPRIMS_PGP_KEY_ID) \
-	WAITPRIMS_GPG_HOMEDIR=$(WAITPRIMS_GPG_HOMEDIR) \
+	@WAITPRIMS_MINISIGN_KEY="$(WAITPRIMS_MINISIGN_KEY)" \
+	WAITPRIMS_MINISIGN_PUB="$(WAITPRIMS_MINISIGN_PUB)" \
+	WAITPRIMS_PGP_KEY_ID="$(WAITPRIMS_PGP_KEY_ID)" \
+	WAITPRIMS_GPG_HOMEDIR="$(WAITPRIMS_GPG_HOMEDIR)" \
 	./scripts/export-release-keys.sh $(DIST_RELEASE)
 
 release-verify-checksums: ## Verify checksums match artifacts

@@ -4,6 +4,7 @@
 # Use in CI to ensure version consistency, or before signing locally.
 #
 # Environment variables:
+#   WAITPRIMS_RELEASE_KEY   - Operator-provided release key (v-prefixed tag)
 #   WAITPRIMS_RELEASE_TAG   - Override tag to check
 #   WAITPRIMS_REQUIRE_TAG   - Set to 1 to fail if no tag found (for CI)
 
@@ -24,6 +25,10 @@ read_version() {
 detect_tag() {
 	if [ -n "${WAITPRIMS_RELEASE_TAG:-}" ]; then
 		printf '%s' "${WAITPRIMS_RELEASE_TAG}"
+		return 0
+	fi
+	if [ -n "${WAITPRIMS_RELEASE_KEY:-}" ]; then
+		printf '%s' "${WAITPRIMS_RELEASE_KEY}"
 		return 0
 	fi
 	if [ -n "${RELEASE_TAG:-}" ]; then
@@ -50,13 +55,21 @@ main() {
 	version="$(read_version)"
 
 	local expected="v${version}"
+	if [ -n "${WAITPRIMS_RELEASE_TAG:-}" ] &&
+		[ -n "${WAITPRIMS_RELEASE_KEY:-}" ] &&
+		[ "${WAITPRIMS_RELEASE_TAG}" != "${WAITPRIMS_RELEASE_KEY}" ]; then
+		echo "error: conflicting release tag inputs" >&2
+		echo "  WAITPRIMS_RELEASE_TAG and WAITPRIMS_RELEASE_KEY differ" >&2
+		exit 1
+	fi
+
 	local tag
 	tag="$(detect_tag)"
 
 	if [ -z "$tag" ]; then
 		local require_tag="${WAITPRIMS_REQUIRE_TAG:-}"
 		if [ "${require_tag}" = "1" ]; then
-			echo "error: no exact tag found for HEAD and no WAITPRIMS_RELEASE_TAG provided" >&2
+			echo "error: no exact tag found and no explicit release key/tag provided" >&2
 			exit 1
 		fi
 		echo "[--] release guard: no tag detected (set WAITPRIMS_REQUIRE_TAG=1 to enforce in CI)"
@@ -68,6 +81,18 @@ main() {
 		echo "  tag:     $tag" >&2
 		echo "  VERSION: $version (expected tag: $expected)" >&2
 		exit 1
+	fi
+
+	if [ "${WAITPRIMS_REQUIRE_TAG:-}" = "1" ]; then
+		if ! git tag --points-at HEAD --format='%(refname:short)' |
+			grep -Fqx "$tag"; then
+			echo "error: required release tag is not on HEAD: $tag" >&2
+			exit 1
+		fi
+		if [ "$(git cat-file -t "refs/tags/$tag" 2>/dev/null || true)" != "tag" ]; then
+			echo "error: required release tag is not annotated: $tag" >&2
+			exit 1
+		fi
 	fi
 
 	echo "[ok] release guard: tag matches VERSION ($tag)"
