@@ -7,6 +7,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Mutex;
+use std::time::Instant;
 
 mod diagnostic;
 
@@ -15,12 +18,16 @@ use std::time::Duration;
 use clap::{Parser, Subcommand, ValueEnum};
 use tracing::info;
 use waitprims_async::{
-    run_coalesce, run_first_match, run_follow, run_poll_cycle, Cancel, CoalescePolicy,
+    run_coalesce, run_first_match, run_follow, run_poll_cycle, Cancel, Clock, CoalescePolicy,
 };
 use waitprims_core::{
     bundled_entry_schema, bundled_message_schema, validate_message, validate_raw_documents,
-    AgentWaitMessage, Error, LiveWaitRequest, MessageType, PollCycleRequest, RegistrationSet,
-    ValidationError,
+    AgentWaitMessage, ContentDigest, DigestAlgorithm, Error, LiveWaitRequest, MessageType,
+    OpaqueRef, PayloadRef, PollCycleRequest, RegistrationSet, Timestamp, ValidationError,
+};
+use waitprims_fs::{
+    EventClock, EventDescriptor, EventRefSink, FilesystemPosture, FsObserver, SystemEventClock,
+    METHOD_FILE_WATCH,
 };
 use waitprims_testkit::{FakeClock, Script, ScriptedObserver};
 
@@ -86,6 +93,18 @@ enum Command {
         /// Local scripted events JSON file.
         #[arg(long, value_name = "PATH")]
         script: PathBuf,
+    },
+    /// Follow native local-filesystem events.
+    Watch {
+        /// Existing local directory that owns all watched subjects.
+        #[arg(long, value_name = "DIR")]
+        root: PathBuf,
+        /// Admitted `registration_set` JSON file.
+        #[arg(long, value_name = "PATH")]
+        registration_set: PathBuf,
+        /// Admitted `live_wait_request` JSON file.
+        #[arg(long, value_name = "PATH")]
+        request: PathBuf,
     },
     /// Replay a scripted held-coalesce session.
     Coalesce {
@@ -217,6 +236,17 @@ Diagnostic CLI. The library is the product; there is no daemon.",
             Ok(()) => ExitCode::SUCCESS,
             Err(err) => {
                 eprintln!("waitprims follow: {err}");
+                ExitCode::from(1)
+            }
+        },
+        Some(Command::Watch {
+            root,
+            registration_set,
+            request,
+        }) => match run_native_watch(&root, &registration_set, &request) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("waitprims watch: {err}");
                 ExitCode::from(1)
             }
         },
@@ -367,6 +397,232 @@ fn run_held_follow(set_path: &Path, request_path: &Path, script_path: &Path) -> 
     })?;
     sink.emit_end(&end)?;
     Ok(())
+}
+
+fn run_native_watch(root: &Path, set_path: &Path, request_path: &Path) -> Result<(), Error> {
+    let (root, set, request, source_instance_ref) =
+        admit_watch_inputs(root, set_path, request_path)?;
+    let event_sink = std::sync::Arc::new(CliEventSink::new(
+        set.aggregate_limits.max_events,
+        set.aggregate_limits.max_bytes,
+    ));
+    let observer = FsObserver::new(
+        source_instance_ref,
+        root,
+        FilesystemPosture::Local,
+        event_sink.clone(),
+    )?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .map_err(|_| Error::Contract {
+            path: "runtime",
+            constraint: "init",
+        })?;
+    let clock = RealtimeClock::new();
+    let cancel = Cancel::new();
+    let mut sink = diagnostic::JsonlSink::new(std::io::stdout());
+    let end = runtime.block_on(run_follow(
+        &observer,
+        &clock,
+        &cancel,
+        &set,
+        &request,
+        |burst| {
+            let result = sink.emit_burst(&burst);
+            async move { result }
+        },
+    ))?;
+    if event_sink.failed() {
+        return Err(Error::Contract {
+            path: "event_ref_sink",
+            constraint: "capacity",
+        });
+    }
+    sink.emit_end(&end)
+}
+
+fn admit_watch_inputs(
+    root: &Path,
+    set_path: &Path,
+    request_path: &Path,
+) -> Result<(PathBuf, RegistrationSet, LiveWaitRequest, OpaqueRef), Error> {
+    reject_non_local_path(root)?;
+    reject_non_local_path(set_path)?;
+    reject_non_local_path(request_path)?;
+    let root = fs::canonicalize(root)
+        .map_err(|_| ValidationError::new("/root", "existing_local_directory_required"))?;
+    if !root.is_dir() {
+        return Err(ValidationError::new("/root", "existing_local_directory_required").into());
+    }
+
+    let set_raw = read_raw(set_path)?;
+    let request_raw = read_raw(request_path)?;
+    let admitted = validate_raw_documents([&set_raw, &request_raw])?;
+    let (set, request) = take_set_and_request(admitted)?;
+    let source_instance_ref = set
+        .registrations
+        .first()
+        .ok_or_else(|| ValidationError::new("/registrations", "nonempty_required"))?
+        .source_instance_ref
+        .clone();
+    for registration in &set.registrations {
+        if registration.method_id.as_str() != METHOD_FILE_WATCH {
+            return Err(
+                ValidationError::new("/registrations/method_id", "file_watch_required").into(),
+            );
+        }
+        if registration.source_instance_ref != source_instance_ref {
+            return Err(ValidationError::new(
+                "/registrations/source_instance_ref",
+                "single_source_required",
+            )
+            .into());
+        }
+        if registration.subject_kind.as_str() != "path" {
+            return Err(
+                ValidationError::new("/registrations/subject_kind", "path_required").into(),
+            );
+        }
+        validate_watch_subject(registration.subject_id.as_str())?;
+    }
+    Ok((root, set, request, source_instance_ref))
+}
+
+fn validate_watch_subject(subject: &str) -> Result<(), Error> {
+    use std::path::Component;
+
+    if subject.is_empty()
+        || subject.starts_with('/')
+        || subject.starts_with('\\')
+        || subject.contains('\\')
+        || subject.as_bytes().get(1) == Some(&b':')
+    {
+        return Err(ValidationError::new(
+            "/registrations/subject_id",
+            "portable_relative_path_required",
+        )
+        .into());
+    }
+    if Path::new(subject).components().any(|component| {
+        matches!(
+            component,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        )
+    }) {
+        return Err(ValidationError::new(
+            "/registrations/subject_id",
+            "portable_relative_path_required",
+        )
+        .into());
+    }
+    Ok(())
+}
+
+struct RealtimeClock {
+    timestamp: Timestamp,
+    instant: Instant,
+}
+
+impl RealtimeClock {
+    fn new() -> Self {
+        Self {
+            timestamp: SystemEventClock.now(),
+            instant: Instant::now(),
+        }
+    }
+}
+
+impl Clock for RealtimeClock {
+    fn now(&self) -> Timestamp {
+        self.timestamp.saturating_add(self.instant.elapsed())
+    }
+
+    async fn sleep_until(&self, deadline: &Timestamp) {
+        tokio::time::sleep(self.now().duration_until(deadline)).await;
+    }
+}
+
+struct CliEventSink {
+    next: AtomicU64,
+    descriptors: Mutex<CliDescriptorStore>,
+    max_events: u64,
+    max_bytes: u64,
+    failed: AtomicBool,
+    #[cfg(test)]
+    inspector: Option<DescriptorInspector>,
+}
+
+#[derive(Default)]
+struct CliDescriptorStore {
+    bytes: u64,
+    entries: std::collections::BTreeMap<String, Vec<u8>>,
+}
+
+#[cfg(test)]
+type DescriptorInspector = std::sync::Arc<dyn Fn(&EventDescriptor, &[u8], &str, u64) + Send + Sync>;
+
+impl CliEventSink {
+    fn new(max_events: u64, max_bytes: u64) -> Self {
+        Self {
+            next: AtomicU64::new(0),
+            descriptors: Mutex::new(CliDescriptorStore::default()),
+            max_events,
+            max_bytes,
+            failed: AtomicBool::new(false),
+            #[cfg(test)]
+            inspector: None,
+        }
+    }
+
+    fn failed(&self) -> bool {
+        self.failed.load(Ordering::Acquire)
+    }
+}
+
+impl Default for CliEventSink {
+    fn default() -> Self {
+        Self::new(u64::MAX, u64::MAX)
+    }
+}
+
+impl EventRefSink for CliEventSink {
+    fn materialize(&self, descriptor: &EventDescriptor) -> waitprims_core::Result<PayloadRef> {
+        use sha2::{Digest, Sha256};
+
+        let bytes = descriptor.canonical_bytes();
+        let digest = Sha256::digest(&bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        #[cfg(test)]
+        if let Some(inspector) = &self.inspector {
+            inspector(
+                descriptor,
+                &bytes,
+                &digest,
+                self.next.load(Ordering::Acquire),
+            );
+        }
+        let sequence = self.next.fetch_add(1, Ordering::AcqRel) + 1;
+        let payload_ref = format!("ref:fs-cli-{sequence}");
+        let mut store = self.descriptors.lock().expect("CLI descriptor store");
+        let next_bytes = store.bytes.saturating_add(bytes.len() as u64);
+        if sequence > self.max_events || next_bytes > self.max_bytes {
+            self.failed.store(true, Ordering::Release);
+            return Err(ValidationError::new("/event_ref_sink", "capacity_exhausted").into());
+        }
+        store.bytes = next_bytes;
+        store.entries.insert(payload_ref.clone(), bytes);
+        Ok(PayloadRef {
+            payload_ref: OpaqueRef::new(payload_ref),
+            content_digest: ContentDigest {
+                algorithm: DigestAlgorithm::Sha256,
+                value: digest,
+            },
+            media_type: Some("application/json".to_string()),
+        })
+    }
 }
 
 fn run_held_coalesce(
@@ -611,8 +867,14 @@ fn read_raw(path: &Path) -> Result<String, waitprims_core::Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::{looks_like_uri, parse_duration, reject_non_local_path};
+    use super::{
+        looks_like_uri, parse_duration, reject_non_local_path, validate_watch_subject,
+        CliEventSink, DescriptorInspector,
+    };
     use std::path::Path;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use waitprims_fs::{EventDescriptor, EventRefSink, FileEventClass};
 
     #[test]
     fn millisecond_duration_is_preserved_not_truncated() {
@@ -648,6 +910,74 @@ mod tests {
         ] {
             assert!(!looks_like_uri(raw), "{raw} must remain a filesystem path");
             reject_non_local_path(Path::new(raw)).expect(raw);
+        }
+    }
+
+    #[test]
+    fn cli_sink_inspects_descriptor_and_digest_before_ref_creation() {
+        use sha2::{Digest, Sha256};
+
+        let inspected = Arc::new(AtomicBool::new(false));
+        let callback_inspected = inspected.clone();
+        let inspector: DescriptorInspector =
+            Arc::new(move |descriptor, bytes, digest, refs_created| {
+                assert_eq!(refs_created, 0, "inspection must precede ref creation");
+                assert_eq!(descriptor.class, FileEventClass::Create);
+                assert_eq!(descriptor.paths, ["watched/leaf"]);
+                assert_eq!(bytes, descriptor.canonical_bytes());
+                let expected = Sha256::digest(bytes)
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>();
+                assert_eq!(digest, expected);
+                callback_inspected.store(true, Ordering::Release);
+            });
+        let sink = CliEventSink {
+            inspector: Some(inspector),
+            ..CliEventSink::default()
+        };
+        let payload = sink
+            .materialize(&EventDescriptor {
+                class: FileEventClass::Create,
+                paths: vec!["watched/leaf".to_string()],
+            })
+            .expect("materialize");
+
+        assert!(inspected.load(Ordering::Acquire));
+        assert_eq!(payload.payload_ref.as_str(), "ref:fs-cli-1");
+        assert_eq!(
+            sink.descriptors
+                .lock()
+                .expect("descriptor store")
+                .entries
+                .get("ref:fs-cli-1")
+                .expect("stored descriptor"),
+            br#"{"class":"create","paths":["watched/leaf"]}"#
+        );
+    }
+
+    #[test]
+    fn cli_sink_capacity_exhaustion_is_fail_closed() {
+        let sink = CliEventSink::new(1, 1024);
+        let descriptor = EventDescriptor {
+            class: FileEventClass::Create,
+            paths: vec!["watched/leaf".to_string()],
+        };
+        sink.materialize(&descriptor).expect("first descriptor");
+        let error = sink
+            .materialize(&descriptor)
+            .expect_err("second descriptor must exceed event capacity");
+        assert!(sink.failed());
+        assert_eq!(error.to_string(), "/event_ref_sink: capacity_exhausted");
+    }
+
+    #[test]
+    fn watch_subjects_are_portable_relative_paths() {
+        for accepted in [".", "leaf", "directory/leaf"] {
+            validate_watch_subject(accepted).expect(accepted);
+        }
+        for rejected in ["", "/absolute", "../escape", r"directory\leaf", "C:/drive"] {
+            validate_watch_subject(rejected).expect_err(rejected);
         }
     }
 
