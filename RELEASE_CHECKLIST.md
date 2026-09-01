@@ -354,26 +354,21 @@ shasum -a 256 -c SHA256SUMS --ignore-missing
 minisign -Vm SHA256SUMS -p waitprims-minisign.pub
 ```
 
-## 5. Post-release version bump
+## 5. Post-release state
 
-After the release is uploaded and verified, bump VERSION for the next
-development cycle:
+Do **not** bump `VERSION` after a release. `VERSION`, the workspace package
+version, internal dependency pins, and `Cargo.lock` remain at the latest
+released version until the next release-preparation pack.
 
-```bash
-make version-patch   # 0.1.1 -> 0.1.2
-# or: make version-minor  # 0.1.1 -> 0.2.0
-# or: make version-major  # 0.1.1 -> 1.0.0
+Development builds from later commits may therefore report the latest release
+version while the working tree or commit differs from the release tag. Use the
+Git commit identity to distinguish those builds. The project does not use a
+`v<next-semver>-dev` convention.
 
-make version-sync
-
-git add VERSION Cargo.toml Cargo.lock
-git commit -m "chore: bump version to v$(cat VERSION)-dev"
-git push origin main
-```
-
-`make version-sync` must run immediately after the version bump. The `-dev`
-suffix in the commit message is a convention marking a development snapshot
-— it does not affect semver.
+The next version change is made during the next release preparation by running
+the appropriate `make version-patch`, `make version-minor`, or
+`make version-major` target, followed immediately by `make version-sync` and
+the release documentation updates required by the pre-tag gate.
 
 ## Quick reference: all release targets
 
