@@ -10,7 +10,7 @@
 #   make release-preflight Verify pre-tag requirements
 #   make release-check     Version consistency + cargo package (does not publish)
 
-.PHONY: all help check test fmt fmt-check lint build clean version demo-follow demo-coalesce
+.PHONY: all help check test fmt fmt-check lint build clean version demo-follow demo-coalesce demo-watch
 .PHONY: precommit prepush pr-final
 .PHONY: version-patch version-minor version-major version-set version-sync version-check
 .PHONY: release-check release-preflight release-guard-tag-version
@@ -60,6 +60,7 @@ help: ## Show available targets
 	@echo "  build           cargo build --workspace"
 	@echo "  demo-follow     Locked offline held-follow CLI demo vs golden JSONL"
 	@echo "  demo-coalesce   Locked offline held-coalesce CLI demo vs golden JSONL"
+	@echo "  demo-watch      Native filesystem CLI demo with bounded retry"
 	@echo "  clean           cargo clean"
 	@echo "  precommit       fmt-check, clippy"
 	@echo "  prepush         fmt-check, clippy, locked tests, version-check"
@@ -135,6 +136,10 @@ demo-coalesce: ## Locked offline held-coalesce CLI demo vs golden JSONL
 		| cmp - fixtures/coalesce-demo/golden.jsonl
 	@echo "[ok] demo-coalesce matched golden JSONL"
 
+demo-watch: ## Native filesystem CLI demo with bounded create/remove retry
+	$(CARGO) test --locked -p waitprims-cli --test watch_cli native_watch_demo_uses_bounded_retry_and_visible_event_surface
+	@echo "[ok] demo-watch observed native filesystem JSONL"
+
 clean: ## Remove build artifacts
 	$(CARGO) clean
 	@echo "[ok] Clean complete"
@@ -145,7 +150,7 @@ precommit: fmt-check lint ## Fast checks for every commit
 prepush: fmt-check lint test version-check ## Thorough checks before push
 	@echo "[ok] Pre-push checks passed"
 
-pr-final: prepush demo-follow demo-coalesce ## Final PR merge-readiness gate
+pr-final: prepush demo-follow demo-coalesce demo-watch ## Final PR merge-readiness gate
 	@echo "[ok] PR final checks passed"
 
 # -----------------------------------------------------------------------------
