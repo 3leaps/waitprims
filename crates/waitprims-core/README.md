@@ -6,7 +6,7 @@ This crate has no async runtime and does not open sockets. Public JSON
 is exactly the six `agent-wait/v0` message kinds.
 
 ```toml
-waitprims-core = "0.1"
+waitprims-core = "0.2"
 ```
 
 Docs: <https://docs.rs/waitprims-core>

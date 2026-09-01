@@ -12,6 +12,23 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-09-01
+
+- Add `waitprims-fs`, a native local-filesystem `Observer` backed by
+  `RecommendedWatcher`, with no polling fallback, and opt it in to
+  library-crate publication
+- Normalize native create, write, remove, and rename notifications into
+  root-relative event descriptors with caller-owned payload references
+- Fail closed on unsupported filesystem posture, unsafe path changes,
+  rescan requirements, ambiguous events for specific predicates, overflow,
+  and payload-reference sink failures
+- Support first-match, poll-cycle, held-follow, and held-coalesce runners
+  without changing their public contracts
+- Add diagnostic `waitprims watch` with local file inputs, one filesystem
+  source per invocation, bounded descriptor storage, and existing
+  `follow_burst` / `follow_end` JSONL
+- Add a native filesystem demo and cross-platform integration coverage
+
 ## [0.2.1] - 2026-08-27
 
 - Pin `contract: agent-wait/v0` at Crucible `v0.1.28` (`4bc95146…`)
@@ -92,7 +109,8 @@ APIs may still move.
 - CI matrix already on main (`fast` plus hosted smokes; arm64 labs
   same-repo only)
 
-[Unreleased]: https://github.com/3leaps/waitprims/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/3leaps/waitprims/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/3leaps/waitprims/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/3leaps/waitprims/compare/v0.1.3...v0.2.1
 [0.1.3]: https://github.com/3leaps/waitprims/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/3leaps/waitprims/compare/v0.1.1...v0.1.2

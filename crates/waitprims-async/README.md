@@ -6,7 +6,7 @@ Tokio is used for runtime, time, and synchronization only. This crate
 does not open network sockets and is not a daemon.
 
 ```toml
-waitprims-async = "0.1"
+waitprims-async = "0.2"
 ```
 
 Depends on [`waitprims-core`](https://crates.io/crates/waitprims-core).

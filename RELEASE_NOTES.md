@@ -8,6 +8,40 @@
 
 ---
 
+## v0.2.2 — 2026-09-01
+
+Native local-filesystem observation and a diagnostic command that exercises
+it directly from a checkout.
+
+### Highlights
+
+- New `waitprims-fs` implements the existing `Observer` contract with the
+  platform-native `RecommendedWatcher`; it does not add a polling fallback.
+- Native create, write, remove, and rename notifications become minimal,
+  root-relative descriptors materialized through a caller-owned payload sink.
+- Filesystem binds fail closed on unsupported posture, unsafe path changes,
+  rescan requirements, ambiguous events for specific predicates, overflow,
+  and sink or digest failures.
+- The observer works with the existing first-match, poll-cycle, held-follow,
+  and held-coalesce runners without changing the six public wire messages.
+- Diagnostic `waitprims watch` accepts local registration and request files,
+  runs one native filesystem source, and emits the existing
+  `follow_burst` / `follow_end` JSONL views.
+- Native demo coverage runs across the supported CI platform matrix without
+  introducing a public watcher API or filesystem polling.
+
+### Upgrade notes
+
+- Workspace crates move from 0.2.1 to 0.2.2.
+- `waitprims-fs` is newly available as a library crate.
+- `waitprims-cli` remains unpublished.
+- Public JSON remains exactly the six `agent-wait/v0` message kinds.
+- Git users should pin `v0.2.2`.
+
+Full notes: [docs/releases/v0.2.2.md](docs/releases/v0.2.2.md)
+
+---
+
 ## v0.2.1 — 2026-08-27
 
 Held-follow and held-coalesce runners, deterministic diagnostic demos,
@@ -66,29 +100,3 @@ is intended.
   still drafts an unsigned GitHub release.
 
 Full notes: [docs/releases/v0.1.3.md](docs/releases/v0.1.3.md)
-
----
-
-## v0.1.2 — 2026-08-18
-
-Release-kit hygiene. No library API change is intended. This release
-does not publish to crates.io or change repository visibility.
-
-### Highlights
-
-- Makefile release leaf targets have no write-chain precursors.
-  `make release-export-keys` does not re-clean or re-download.
-- `make release` is the only serialized walk: clean, download, notes,
-  checksums, sign, export-keys, upload. Verification runs once, as
-  the upload grouping prerequisite.
-- CLI `--version` test tracks the workspace `VERSION` file.
-- Makefile `precommit` and `pr-final` sit beside `prepush`.
-
-### Upgrade notes
-
-- No public API change.
-- `publish` stays `false`. Pin from git if you already pin `v0.1.1`.
-- Signing is local MFA (`make release-sign` / `make release`). CI
-  still drafts an unsigned GitHub release.
-
-Full notes: [docs/releases/v0.1.2.md](docs/releases/v0.1.2.md)

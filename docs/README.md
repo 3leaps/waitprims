@@ -70,18 +70,20 @@ schema. Point callers at [`schemas/v0/`](../schemas/v0/). The schema
 | ----- | ---- |
 | `waitprims-core` | Types, errors, validation, digest and RFC3339 helpers |
 | `waitprims-async` | First-match, poll-cycle, and held-follow runners |
+| `waitprims-fs` | Native local-filesystem observer |
 | `waitprims-testkit` | Fake clock and scripted observers |
 | `waitprims-cli` | Diagnostic binary (`waitprims`); not on crates.io |
 
 ## Install
 
-This cut enables crates.io for the three library crates. After that
+This cut enables crates.io for the four library crates. After that
 publication, pin the minor line; do not copy a patch from this file.
 
 ```toml
-waitprims-core = "0.1"
-waitprims-async = "0.1"
-waitprims-testkit = "0.1"
+waitprims-core = "0.2"
+waitprims-async = "0.2"
+waitprims-fs = "0.2"
+waitprims-testkit = "0.2"
 ```
 
 Until the crates are on the registry, pin a git tag. The CLI is
