@@ -242,20 +242,30 @@ text becomes true only after this step.
 ### Set environment variables
 
 Load the operator's secure release environment. This repository intentionally
-does not prescribe host-local secret paths. Confirm presence without printing
-values:
+does not prescribe host-local secret paths. From a clean worktree, fetch and
+check out the exact release tag before running the strict guard. Confirm
+environment presence without printing values:
 
 ```bash
 : "${WAITPRIMS_RELEASE_KEY:?missing approved release key}"
 : "${WAITPRIMS_MINISIGN_KEY:?missing approved minisign secret key}"
 : "${WAITPRIMS_MINISIGN_PUB:?missing approved minisign public key}"
+test -z "$(git status --porcelain)" || {
+  echo "error: release signing requires a clean worktree" >&2
+  exit 1
+}
+git fetch origin \
+  "refs/tags/${WAITPRIMS_RELEASE_KEY}:refs/tags/${WAITPRIMS_RELEASE_KEY}"
+git checkout --detach "$WAITPRIMS_RELEASE_KEY"
 WAITPRIMS_REQUIRE_TAG=1 make release-guard-tag-version
 ```
 
 `WAITPRIMS_RELEASE_KEY` is the canonical `vX.Y.Z` tag and is consumed directly
-by the Makefile. `WAITPRIMS_PGP_KEY_ID` and `WAITPRIMS_GPG_HOMEDIR` are
-optional. Never paste environment values or signing-command transcripts into
-issues, pull requests, or chat.
+by the Makefile. The strict guard confirms that the tag is annotated, matches
+`VERSION`, and points at `HEAD`; the signing steps therefore source per-cut
+notes from the tagged tree. `WAITPRIMS_PGP_KEY_ID` and
+`WAITPRIMS_GPG_HOMEDIR` are optional. Never paste environment values or
+signing-command transcripts into issues, pull requests, or chat.
 
 ### Signing steps
 
