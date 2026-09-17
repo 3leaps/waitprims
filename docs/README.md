@@ -76,8 +76,8 @@ schema. Point callers at [`schemas/v0/`](../schemas/v0/). The schema
 
 ## Install
 
-This cut enables crates.io for the four library crates. After that
-publication, pin the minor line; do not copy a patch from this file.
+The four library crates are available on crates.io. Pin the minor line;
+do not copy a patch from this file.
 
 ```toml
 waitprims-core = "0.2"
@@ -86,8 +86,7 @@ waitprims-fs = "0.2"
 waitprims-testkit = "0.2"
 ```
 
-Until the crates are on the registry, pin a git tag. The CLI is
-diagnostic only. From the repository root, build it:
+The CLI is diagnostic only. From the repository root, build it:
 
 ```bash
 cargo build --locked -p waitprims-cli
@@ -116,9 +115,10 @@ compares stdout to
 See [`fixtures/follow-demo/README.md`](../fixtures/follow-demo/README.md)
 for the copyable three-file command.
 
-docs.rs pages appear after the first crates.io upload:
+Library API documentation is on docs.rs:
 [waitprims-core](https://docs.rs/waitprims-core),
 [waitprims-async](https://docs.rs/waitprims-async),
+[waitprims-fs](https://docs.rs/waitprims-fs), and
 [waitprims-testkit](https://docs.rs/waitprims-testkit).
 
 ## Releases
