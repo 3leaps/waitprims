@@ -61,8 +61,7 @@ silently advance cursors.
 
 ## Status
 
-This cut enables crates.io for the library crates. After that
-publication, depend with:
+The four library crates are available on crates.io. Depend with:
 
 ```toml
 waitprims-core = "0.2"
@@ -71,8 +70,8 @@ waitprims-fs = "0.2"
 waitprims-testkit = "0.2"
 ```
 
-Until then, pin a git tag. The diagnostic CLI is not published. APIs
-may still move. See [docs/README.md](docs/README.md#install).
+The diagnostic CLI is not published. APIs may still move. See
+[docs/README.md](docs/README.md#install).
 
 Pinned `contract: agent-wait/v0` at Crucible `4bc95146bc4ed503180fb13971947854a36957cb` (`v0.1.28`). Optional `registration.priority` is a presentation hint, not authorization. See [`schemas/v0/PIN.md`](schemas/v0/PIN.md).
 
@@ -97,7 +96,7 @@ gate. Fork PRs do not run the arm64 cells. See
 tests and version-check. `make pr-final` also runs `make demo-follow`.
 `make release-check` packages the workspace (`cargo package --workspace`)
 and publishes none. Only the four library crates are publishable.
-See [`RELEASE_CHECKLIST.md`](RELEASE_CHECKLIST.md) for the later signed
+See [`RELEASE_CHECKLIST.md`](RELEASE_CHECKLIST.md) for the signed
 GitHub release flow.
 
 The diagnostic binary lands at `target/debug/waitprims`.
@@ -109,11 +108,13 @@ waitprims validate --input <file-or-directory>
 waitprims wait --registration-set <file> --request <file> --script <file>
 waitprims poll --registration-set <file> --request <file> --script <file>
 waitprims follow --registration-set <file> --request <file> --script <file>
+waitprims coalesce --registration-set <file> --request <file> --script <file>
+waitprims watch --root <directory> --registration-set <file> --request <file>
 waitprims contract
 waitprims schema [--message-type <message_type>]
 ```
 
-`validate --input` admits one message file or a directory set. `wait` resolves a cited registration set and first-matches a scripted observer. `poll` runs one bounded poll-cycle over the same set. `follow` binds once and streams diagnostic JSONL bursts until a runtime end. `contract` prints the compiled capability pin. `schema` prints the bundled JSON Schema (`$id` and document); `--message-type` prints that kind's definition without minting a fragment `$id`. JSON goes to stdout. Logs and errors go to stderr. Scripts are local files; `--script -` is rejected.
+`validate --input` admits one message file or a directory set. `wait` resolves a cited registration set and first-matches a scripted observer. `poll` runs one bounded poll-cycle over the same set. `follow` and `coalesce` replay scripted held sessions as diagnostic JSONL. `watch` runs a native local-filesystem observer and streams diagnostic JSONL. `contract` prints the compiled capability pin. `schema` prints the bundled JSON Schema (`$id` and document); `--message-type` prints that kind's definition without minting a fragment `$id`. JSON goes to stdout. Logs and errors go to stderr. Scripts are local files; `--script -` is rejected.
 
 Install the diagnostic binary from this tree (it is not on crates.io):
 
