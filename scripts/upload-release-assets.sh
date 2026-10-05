@@ -10,7 +10,7 @@ directory="${2:-dist/release}"
 "$root/scripts/verify-checksums.sh" "$directory"
 "$root/scripts/verify-staged-public.sh" "$directory"
 "$root/scripts/verify-signatures.sh" "$directory"
-assert_github_release_state release_checksummed_assets
+assert_github_release_state release_signed_assets resume
 files=()
 while IFS= read -r name; do files+=("$directory/$name"); done < <(release_signed_assets)
 require_published_anchor "$directory"

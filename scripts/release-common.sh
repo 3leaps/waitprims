@@ -6,7 +6,7 @@ set -euo pipefail
 WAITPRIMS_REPOSITORY="3leaps/waitprims"
 
 release_repo_root() {
-    git rev-parse --show-toplevel
+    (cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 }
 
 release_version() {
@@ -139,7 +139,7 @@ assert_exact_directory_inventory() (
 )
 
 assert_github_release_state() (
-    local expected_assets_producer="$1"
+    local expected_assets_producer="$1" inventory_mode="${2:-exact}"
     local tag repo_path tag_commit
     tag="$(release_tag)"
     repo_path="$(release_repo_root)"
@@ -177,11 +177,17 @@ assert_github_release_state() (
     fi
     "$expected_assets_producer" | LC_ALL=C sort >"$expected"
     jq -r '.assets[].name' "$state" | LC_ALL=C sort >"$actual"
-    if ! cmp -s "$expected" "$actual"; then
-        echo "error: remote draft asset inventory mismatch" >&2
-        diff -u "$expected" "$actual" >&2 || true
-        return 1
-    fi
+    python3 - "$expected" "$actual" "$inventory_mode" <<'PYTHON'
+from pathlib import Path
+import sys
+expected = Path(sys.argv[1]).read_text().splitlines()
+actual = Path(sys.argv[2]).read_text().splitlines()
+mode = sys.argv[3]
+if len(actual) != len(set(actual)) or mode not in ('exact', 'resume'):
+    sys.exit('error: invalid remote inventory or validation mode')
+if (mode == 'exact' and actual != expected) or (mode == 'resume' and not set(actual) <= set(expected)):
+    sys.exit('error: remote draft asset inventory mismatch')
+PYTHON
 )
 
 # Bind operator work to the staged annotated object and peeled commit.
@@ -206,3 +212,52 @@ require_published_anchor() {
     WAITPRIMS_RELEASE_TAG="$tag" WAITPRIMS_EXPECTED_TAG_OBJECT="$object" WAITPRIMS_EXPECTED_COMMIT="$commit" \
         "$(release_repo_root)/scripts/release-verify-published-tag.sh"
 }
+
+# The original approved ceremony identity is required across separate registry calls.
+load_ceremony_anchor() {
+    local anchor="${WAITPRIMS_RELEASE_ANCHOR_FILE:-}" identity canonical repo_path
+    [[ "$anchor" == /* && -f "$anchor" && -s "$anchor" && ! -L "$anchor" ]] || {
+        echo 'error: approved external ceremony anchor required' >&2
+        return 1
+    }
+    canonical="$(cd "$(dirname "$anchor")" && pwd -P)/$(basename "$anchor")"
+    repo_path="$(release_repo_root)"
+    case "$canonical" in "$repo_path" | "$repo_path"/*)
+        echo 'error: ceremony anchor must be outside trusted checkout' >&2
+        return 1
+        ;;
+    esac
+    identity="$(
+        python3 - "$anchor" "$(release_tag)" <<'PYTHON'
+from pathlib import Path
+import re
+import sys
+entries = {}
+for line in Path(sys.argv[1]).read_text().splitlines():
+    key, sep, value = line.partition('=')
+    if not sep or key in entries or key not in ('tag', 'object', 'commit', 'run', 'attempt'):
+        sys.exit('error: malformed ceremony anchor')
+    entries[key] = value
+if entries.get('tag') != sys.argv[2] or any(not re.fullmatch('[0-9a-f]{40}', entries.get(key, '')) for key in ('object', 'commit')):
+    sys.exit('error: ceremony tag/object/commit mismatch or missing')
+print(entries['object'], entries['commit'])
+PYTHON
+    )" || return 1
+    read -r WAITPRIMS_EXPECTED_TAG_OBJECT WAITPRIMS_EXPECTED_COMMIT <<<"$identity"
+    export WAITPRIMS_EXPECTED_TAG_OBJECT WAITPRIMS_EXPECTED_COMMIT
+}
+
+verify_remote_release_bytes() (
+    local directory="$1" remote_dir name
+    remote_dir="$(mktemp -d)"
+    trap 'rm -rf "$remote_dir"' EXIT
+    assert_github_release_state release_signed_assets
+    gh release download "$(release_tag)" --repo "$WAITPRIMS_REPOSITORY" --pattern '*' --dir "$remote_dir"
+    assert_exact_directory_inventory "$remote_dir" release_signed_assets
+    while IFS= read -r name; do
+        cmp -s "$directory/$name" "$remote_dir/$name" || {
+            echo 'error: remote draft asset bytes differ from verified local set' >&2
+            return 1
+        }
+    done < <(release_signed_assets)
+)

@@ -275,6 +275,9 @@ release-verify-tag: ## Verify local signed annotated tag
 release-verify-remote-tag: ## Verify approved signed remote tag
 	./scripts/release-verify-published-tag.sh
 
+release-record-anchor: ## Record original approved tag object and commit
+	./scripts/release-record-anchor.sh
+
 release-export-pin: ## Maintainer public pin export (refuses overwrite)
 	./scripts/release-export-pin.sh
 

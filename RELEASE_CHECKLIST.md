@@ -70,6 +70,13 @@ One canonical `vX.Y.Z` tag. Historical tags remain untouched.
       Record annotated object and peeled commit. GitHub must report Verified
       with reason `valid`, in addition to approved-primary and exact-subkey
       verification.
+- [ ] Record the original approved annotated object and peeled commit in an
+      external `WAITPRIMS_RELEASE_ANCHOR_FILE`. Set
+      `WAITPRIMS_EXPECTED_TAG_OBJECT` and `WAITPRIMS_EXPECTED_COMMIT` to the
+      independently recorded signing/push identities, then run
+      `make release-record-anchor`. It verifies those exact inputs and refuses
+      an existing destination. Retain this original file across every separately
+      cued registry dry-run/upload; never replace it with a fresh tag lookup.
 
 ## Read-only CI and local artifact handoff
 
@@ -94,8 +101,14 @@ One canonical `vX.Y.Z` tag. Historical tags remain untouched.
       the complete approved GPG selector/home. Hardware-token/MFA remains local.
 - [ ] `make release-verify`, then `make release-upload`. Required signatures,
       exact checksums and staged-versus-committed public material must verify.
+      Partial or completed uploads may be retried only while the release remains
+      a draft at the same tag/target and every existing name is in the approved
+      signed inventory. All approved local files are uploaded again; unexpected
+      remote names fail closed.
 - [ ] Separately cue `make release-publish`. It re-verifies remote tag identity,
-      exact local signed set and exact remote draft inventory before promotion.
+      exact local signed set, exact remote draft inventory and byte-for-byte
+      agreement of every remote asset (including manifests/signatures) before
+      promotion.
       Never replace a published release or move its tag.
 
 `make release` serializes clean → download → public material → checksums →
@@ -107,9 +120,13 @@ Mutable ref races between verification and API calls remain a residual.
 ## crates.io: separate maintainer cues
 
 The signed remote tag is a prerequisite for every registry operation.
-No blanket upload loop is supplied. From a clean checkout of that verified
-release commit, perform one dry-run and one separately authorized upload at a
-time, using Cargo 1.88.0 and no local patches:
+No blanket upload loop is supplied. Keep the trusted reviewed operator
+checkout clean; it may be newer than the release. Perform one dry-run and one
+separately authorized upload at a time, using Cargo 1.88.0 and no local patches.
+Every operation requires the original external ceremony anchor above. Trusted
+operator code verifies its object/commit, stages the authenticated source in a
+temporary detached worktree, validates configuration and metadata, and runs
+Cargo there. No tagged release-guard script is executed:
 
 | Order | Crate | Indexed predecessors |
 | --- | --- | --- |
@@ -119,7 +136,7 @@ time, using Cargo 1.88.0 and no local patches:
 | 4 | waitprims-fs | core, async, testkit (dev dependency) |
 
 For each crate, `scripts/release-crates-dry-run.sh <crate>` verifies the approved
-signed tag, clean release checkout and indexed predecessors, then runs an
+signed tag against the original ceremony anchor, verified staged source and indexed predecessors, then runs an
 unpatched `cargo publish --dry-run --locked`. After the specific upload cue,
 re-run `make release-verify-remote-tag` immediately before the maintainer's
 `scripts/release-crates-publish.sh <crate>` (one upload, repeated unpatched
@@ -127,7 +144,9 @@ dry-run, signed-tag/configuration checks, then index confirmation). A later HOLD
 cue. After each upload use
 `cargo +1.88.0 info --registry crates-io <crate>@<version>` before the next.
 An older registry version does not satisfy the new cut's version requirement.
-Local patched package success does not waive this gate.
+Inherited Cargo `paths`, patch/replace/source/include and registry-index
+substitutions are rejected in both operator and staged-source contexts. Local
+patched package success does not waive this gate.
 
 Tokens remain in an external secret store, scoped to the four library names.
 Use update-only tokens for existing names; new-name authorization is separate.

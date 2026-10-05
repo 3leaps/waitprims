@@ -10,6 +10,7 @@ spec.loader.exec_module(module)
 module.validate({'build': {'jobs': 2}, 'registry': {'token': 'synthetic'}}, {'CARGO_REGISTRY_TOKEN': 'synthetic'})
 for config, env in [
     ({'patch': {'crates-io': {}}}, {}),
+    ({'paths': ['synthetic']}, {}),
     ({'source': {'crates-io': {'replace-with': 'other'}}}, {}),
     ({'replace': {}}, {}),
     ({'include': ['other.toml']}, {}),
@@ -24,3 +25,16 @@ for config, env in [
     raise SystemExit('error: inherited Cargo override accepted')
 print('[ok] inherited Cargo patch/source override controls')
 PY
+
+scratch="$(mktemp -d)"
+trap 'rm -rf "$scratch"' EXIT
+printf 'paths=["synthetic"]\n' >"$scratch/config.toml"
+if CARGO_HOME="$scratch" "$root/scripts/check-registry-config.py" >"$scratch/output" 2>&1; then
+    echo 'error: inherited Cargo paths file accepted' >&2
+    exit 1
+fi
+
+if CARGO_HOME=relative "$root/scripts/check-registry-config.py" >"$scratch/output" 2>&1; then
+    echo 'error: relative Cargo home accepted across source worktrees' >&2
+    exit 1
+fi

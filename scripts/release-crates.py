@@ -45,24 +45,37 @@ def validate(packages, names, manifests):
 
 
 def main():
+    args = sys.argv[1:]
+    source_root = ROOT
+    if args[:1] == ['--source-root']:
+        if len(args) != 3:
+            raise ValueError('expected verified source root and mode')
+        source_root = pathlib.Path(args[1]).resolve()
+        args = args[2:]
     names = PLAN.read_text().splitlines()
     if any(not n or n != n.strip() or n.startswith("#") for n in names):
         raise ValueError("crate list must contain one bare name per line")
     metadata = json.loads(
         subprocess.check_output(
             ["cargo", "metadata", "--no-deps", "--format-version", "1", "--locked"],
-            cwd=ROOT,
+            cwd=source_root,
         )
     )
     packages = metadata["packages"]
+    for package in packages:
+        if not pathlib.Path(package['manifest_path']).resolve().is_relative_to(source_root):
+            raise ValueError('workspace package escapes verified source')
+        for dependency in package['dependencies']:
+            if dependency.get('path') and not pathlib.Path(dependency['path']).resolve().is_relative_to(source_root):
+                raise ValueError('path dependency escapes verified source')
     manifests = {
         p["name"]: tomllib.loads(pathlib.Path(p["manifest_path"]).read_text())
         for p in packages
     }
     validate(packages, names, manifests)
-    if sys.argv[1:] == ["list"]:
+    if args == ["list"]:
         print("\n".join(names))
-    elif sys.argv[1:] != ["check"]:
+    elif args != ["check"]:
         raise ValueError("usage: release-crates.py check|list")
 
 

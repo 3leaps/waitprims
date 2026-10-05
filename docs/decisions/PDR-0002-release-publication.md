@@ -26,13 +26,19 @@ source patches. Registry operations use no patches and proceed core, async,
 testkit, fs, with indexed predecessor confirmation after each separately cued
 upload. The CLI remains unpublished. A previous core version does not satisfy
 new-version internal requirements. Tag CI completion does not require a prior
-registry upload.
+registry upload. The trusted operator checkout retains registry orchestration;
+Cargo uses a separate verified-source worktree. Registry calls require the
+original recorded ceremony object and commit across separate operations.
 
 Post-tag gates read public material from the tagged commit as inert Git
 objects and execute trusted checkout code. They remain independent of newer
 main VERSION changes. Independent primary approval is required even when a
 candidate key and its own anchors agree. Every publication check binds both
-the tag object and commit; mutable-ref races between checks and API calls
+the tag object and commit. Promotion also compares every remote asset's bytes
+with the verified local signed set. A draft with a partial or completed subset
+of approved names may be restored by re-uploading the exact local set; changed
+tag/target or unexpected names fail. Post-tag PGP selectors read released public
+material rather than newer operator anchors; mutable-ref races between checks and API calls
 remain a residual. Repository defaults and tag rulesets are checked separately;
 read-only workflow YAML does not establish an external permission ceiling.
 

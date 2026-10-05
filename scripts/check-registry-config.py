@@ -16,7 +16,7 @@ def substituted_env(name):
 
 
 def validate(config, environment):
-    if any(name in config for name in ("patch", "replace", "source", "include")):
+    if any(name in config for name in ("patch", "replace", "source", "include", "paths")):
         raise ValueError("Cargo patch/source overrides are forbidden for registry operations")
     for registry in config.get("registries", {}).values():
         if "index" in registry:
@@ -29,7 +29,14 @@ def validate(config, environment):
 
 def main():
     root = Path(__file__).resolve().parent.parent
-    home = Path(os.environ.get("CARGO_HOME", str(Path.home() / ".cargo"))).resolve()
+    if sys.argv[1:]:
+        if len(sys.argv) != 3 or sys.argv[1] != '--source-root':
+            raise ValueError('expected optional verified source root')
+        root = Path(sys.argv[2]).resolve()
+    home = Path(os.environ.get("CARGO_HOME", str(Path.home() / ".cargo")))
+    if not home.is_absolute():
+        raise ValueError('Cargo home must be absolute for registry operations')
+    home = home.resolve()
     directories = {home, *(path / ".cargo" for path in [root, *root.parents])}
     validate({}, os.environ)
     validate(tomllib.loads((root / "Cargo.toml").read_text()), os.environ)
@@ -37,7 +44,7 @@ def main():
         for name in ("config", "config.toml"):
             path = directory / name
             if path.exists():
-                if not path.is_file():
+                if not path.is_file() or path.is_symlink():
                     raise ValueError("Cargo configuration must be a regular readable file")
                 validate(tomllib.loads(path.read_text()), os.environ)
     print("[ok] inherited Cargo configuration has no source substitutions")

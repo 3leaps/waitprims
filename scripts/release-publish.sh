@@ -9,6 +9,6 @@ directory="${1:-dist/release}"
 "$root/scripts/verify-checksums.sh" "$directory"
 "$root/scripts/verify-staged-public.sh" "$directory"
 "$root/scripts/verify-signatures.sh" "$directory"
-assert_github_release_state release_signed_assets
+verify_remote_release_bytes "$directory"
 require_published_anchor "$directory"
 gh release edit "$(release_tag)" --repo "$WAITPRIMS_REPOSITORY" --draft=false

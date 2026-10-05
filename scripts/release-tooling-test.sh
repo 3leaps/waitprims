@@ -6,6 +6,7 @@ cd "$root"
 for suite in release-guard-tag-version check-registry-config release-crates release-decernor \
     release-pin-precursors release-prepare-tag-message release-tag-operator release-tag-controls \
     release-restore-tag-ref verify-pinned-tag release-verify-published-tag \
-    release-workflow-permissions release-assets verify-staged-public release-ci-artifact-draft; do
+    release-workflow-permissions release-assets verify-staged-public release-ci-artifact-draft \
+    release-registry-boundary release-promotion-recovery release-post-tag-selector; do
     "$root/scripts/$suite.test.sh"
 done

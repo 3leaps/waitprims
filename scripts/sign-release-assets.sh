@@ -13,6 +13,7 @@ set -euo pipefail
 TAG=${1:?"usage: sign-release-assets.sh <tag> [dir]"}
 DIR=${2:-dist/release}
 root="$(cd "$(dirname "$0")/.." && pwd -P)"
+cd "$root"
 source "$root/scripts/release-common.sh"
 export WAITPRIMS_RELEASE_TAG="$TAG"
 require_published_anchor "$DIR"
@@ -20,8 +21,7 @@ require_published_anchor "$DIR"
 "$root/scripts/verify-checksums.sh" "$DIR"
 "$root/scripts/verify-staged-public.sh" "$DIR"
 if [[ -n "${WAITPRIMS_PGP_KEY_ID:-}" ]]; then
-    source "$root/scripts/release-tag-common.sh"
-    tag_key_selector
+    "$root/scripts/release-post-tag-selector.sh" "$DIR"
 fi
 
 if [ ! -d "$DIR" ]; then
