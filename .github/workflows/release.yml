@@ -1,8 +1,9 @@
-# waitprims signed-release draft
+# waitprims read-only release artifacts
 #
 # On a v* tag, build unsigned CLI archives for the platforms this repo
-# already smokes, attach SBOM + licenses, and open a draft GitHub release.
-# CI does not hold signing keys. A maintainer signs and uploads locally.
+# already smokes, and stage SBOM + licenses as workflow artifacts.
+# CI holds no signing or release authority. The trusted maintainer ceremony
+# independently verifies the signed tag, creates the draft and publishes.
 
 name: Release
 
@@ -22,14 +23,41 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
+      object: ${{ steps.identity.outputs.object }}
+      commit: ${{ steps.identity.outputs.commit }}
     defaults:
       run:
         shell: bash
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+          fetch-depth: 0
+
+      - name: Restore and verify signed annotated tag
+        id: identity
+        env:
+          WAITPRIMS_RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          ./scripts/release-restore-tag-ref.sh
+          ./scripts/verify-pinned-tag.sh
+          object=$(git rev-parse "refs/tags/$WAITPRIMS_RELEASE_TAG")
+          commit=$(git rev-parse "refs/tags/$WAITPRIMS_RELEASE_TAG^{}")
+          echo "object=$object" >> "$GITHUB_OUTPUT"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          printf '{"tag":"%s","object":"%s","commit":"%s"}\n' "$WAITPRIMS_RELEASE_TAG" "$object" "$commit" > release-identity.json
+
+      - name: Upload artifact identity and licenses
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-identity
+          if-no-files-found: error
+          retention-days: 30
+          path: |
+            release-identity.json
+            LICENSE-MIT
+            LICENSE-APACHE
 
       - name: Validate VERSION matches tag
         id: version
@@ -53,17 +81,27 @@ jobs:
         shell: bash
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+          ref: ${{ needs.validate-version.outputs.commit }}
+
+      - name: Confirm annotated tag identity
+        env:
+          WAITPRIMS_RELEASE_TAG: ${{ github.ref_name }}
+          WAITPRIMS_EXPECTED_TAG_OBJECT: ${{ needs.validate-version.outputs.object }}
+          EXPECTED_COMMIT: ${{ needs.validate-version.outputs.commit }}
+        run: |
+          ./scripts/release-restore-tag-ref.sh
+          test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
 
       - name: Install Rust 1.88.0
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # reviewed 2026-08-05 commit
         with:
           toolchain: 1.88.0
 
       - name: Verify crates package (does not publish)
-        run: cargo package --workspace
+        run: ./scripts/check-packages.sh
 
   build-cli:
     name: Build CLI (${{ matrix.artifact_suffix }})
@@ -81,7 +119,7 @@ jobs:
             target: aarch64-unknown-linux-gnu
             artifact_suffix: linux-arm64
             archive: tar.gz
-          - runner: macos-14
+          - runner: macos-15
             target: aarch64-apple-darwin
             artifact_suffix: darwin-arm64
             archive: tar.gz
@@ -98,12 +136,22 @@ jobs:
         shell: bash
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+          ref: ${{ needs.validate-version.outputs.commit }}
+
+      - name: Confirm annotated tag identity
+        env:
+          WAITPRIMS_RELEASE_TAG: ${{ github.ref_name }}
+          WAITPRIMS_EXPECTED_TAG_OBJECT: ${{ needs.validate-version.outputs.object }}
+          EXPECTED_COMMIT: ${{ needs.validate-version.outputs.commit }}
+        run: |
+          ./scripts/release-restore-tag-ref.sh
+          test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
 
       - name: Install Rust 1.88.0
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # reviewed 2026-08-05 commit
         with:
           toolchain: 1.88.0
 
@@ -133,16 +181,18 @@ jobs:
           fi
 
       - name: Upload CLI artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: cli-${{ matrix.artifact_suffix }}
+          if-no-files-found: error
+          retention-days: 30
           path: waitprims-${{ needs.validate-version.outputs.version }}-${{ matrix.artifact_suffix }}.${{ matrix.archive }}
 
   sbom:
     name: Generate SBOM
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/fulmenhq/sbom-tools:latest
+      image: ghcr.io/fulmenhq/sbom-tools@sha256:8bb11cbcb77382d32c03f59e4ed7b9bdfc6b64bf549b43dc6be6db66b6586689
       options: --user 1001
     needs: validate-version
     defaults:
@@ -150,91 +200,27 @@ jobs:
         shell: bash
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+          ref: ${{ needs.validate-version.outputs.commit }}
+
+      - name: Confirm annotated tag identity
+        env:
+          WAITPRIMS_RELEASE_TAG: ${{ github.ref_name }}
+          WAITPRIMS_EXPECTED_TAG_OBJECT: ${{ needs.validate-version.outputs.object }}
+          EXPECTED_COMMIT: ${{ needs.validate-version.outputs.commit }}
+        run: |
+          ./scripts/release-restore-tag-ref.sh
+          test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
 
       - name: Generate SBOM (CycloneDX)
         run: syft dir:. -o cyclonedx-json > sbom-${{ needs.validate-version.outputs.version }}.cdx.json
 
       - name: Upload SBOM
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: sbom
+          if-no-files-found: error
+          retention-days: 30
           path: sbom-${{ needs.validate-version.outputs.version }}.cdx.json
-
-  publish:
-    name: Publish Draft Release
-    runs-on: ubuntu-latest
-    needs:
-      - validate-version
-      - package-check
-      - build-cli
-      - sbom
-    permissions:
-      contents: write
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-
-      - name: Download CLI artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: cli-*
-          path: release-cli
-
-      - name: Download SBOM
-        uses: actions/download-artifact@v4
-        with:
-          name: sbom
-          path: release-sbom
-
-      - name: Organize release files
-        run: |
-          set -euo pipefail
-          mkdir -p release
-          find release-cli -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec mv {} release/ \;
-          mv release-sbom/*.json release/
-          cp LICENSE-MIT LICENSE-APACHE release/
-          ls -la release/
-
-      - name: Create Draft Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: release/*
-          draft: true
-          body: |
-            ## waitprims v${{ needs.validate-version.outputs.version }}
-
-            Library-first wait primitive. The CLI is diagnostic. There is no daemon and no language bindings.
-
-            This draft is **unsigned**. CI does not hold signing keys. A maintainer signs checksums locally (MFA / hardware token) and uploads them with `make release`.
-
-            Once signed artifacts are available:
-            ```bash
-            minisign -Vm SHA256SUMS -p waitprims-minisign.pub
-            shasum -a 256 -c SHA256SUMS
-            ```
-
-            ### Platform matrix
-
-            Hosted smokes plus same-repo arm64 labs. No musl, no macOS Intel.
-
-            | Platform | CLI |
-            |----------|-----|
-            | Linux x64 | `waitprims-*-linux-amd64.tar.gz` |
-            | Linux arm64 | `waitprims-*-linux-arm64.tar.gz` |
-            | macOS arm64 | `waitprims-*-darwin-arm64.tar.gz` |
-            | Windows x64 | `waitprims-*-windows-amd64.zip` |
-            | Windows arm64 | `waitprims-*-windows-arm64.zip` |
-
-            Workspace `publish` is false; four library crates opt in:
-            `waitprims-core`, `waitprims-async`, `waitprims-testkit`,
-            and `waitprims-fs`.
-            The diagnostic CLI is unpublished. This workflow does not
-            run `cargo publish`.

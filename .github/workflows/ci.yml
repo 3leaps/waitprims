@@ -8,7 +8,7 @@
 # Hosted (every push/PR; no cross, no musl, no macOS Intel,
 # no goneat-tools-runner):
 #   ubuntu-latest              x86_64-unknown-linux-gnu
-#   macos-14                   aarch64-apple-darwin
+#   macos-15                   aarch64-apple-darwin
 #   windows-latest             x86_64-pc-windows-msvc
 # arm64 labs (same-repo only):
 #   ubuntu-latest-arm64-s      aarch64-unknown-linux-gnu
@@ -47,12 +47,12 @@ jobs:
         shell: bash
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
 
       - name: Install Rust 1.88.0
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # reviewed 2026-08-05 commit
         with:
           toolchain: 1.88.0
           components: rustfmt, clippy
@@ -71,6 +71,7 @@ jobs:
           tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
           url="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${tarball}"
           curl -fsSL -o "${RUNNER_TEMP}/actionlint.tgz" "${url}"
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  ${RUNNER_TEMP}/actionlint.tgz" | sha256sum --check
           tar -xzf "${RUNNER_TEMP}/actionlint.tgz" -C "${RUNNER_TEMP}" actionlint
           "${RUNNER_TEMP}/actionlint" -color
 
@@ -89,7 +90,7 @@ jobs:
         include:
           - runner: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-          - runner: macos-14
+          - runner: macos-15
             target: aarch64-apple-darwin
           - runner: windows-latest
             target: x86_64-pc-windows-msvc
@@ -98,12 +99,12 @@ jobs:
         shell: bash
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
 
       - name: Install Rust 1.88.0
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # reviewed 2026-08-05 commit
         with:
           toolchain: 1.88.0
           components: clippy
@@ -138,12 +139,12 @@ jobs:
         shell: bash
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
 
       - name: Install Rust 1.88.0
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # reviewed 2026-08-05 commit
         with:
           toolchain: 1.88.0
           components: clippy
@@ -159,3 +160,32 @@ jobs:
 
       - name: Test
         run: cargo test --workspace --locked
+
+  release-tooling:
+    name: Release tooling controls
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Install Rust 1.88.0
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # reviewed 2026-08-05 commit
+        with:
+          toolchain: 1.88.0
+      - name: Verify tooling prerequisites
+        run: |
+          python3 -c 'import sys; assert sys.version_info >= (3, 11)'
+          command -v gpg
+          command -v jq
+      - name: Install checksum-pinned Decernor for synthetic tests
+        run: |
+          tool_dir="$(mktemp -d "$RUNNER_TEMP/decernor.XXXXXX")"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+            'https://github.com/3leaps/decernor/releases/download/v0.1.8/decernor_0.1.8_linux_amd64.tar.gz' \
+            --output "$tool_dir/decernor_0.1.8_linux_amd64.tar.gz"
+          (cd "$tool_dir" && sha256sum --check "$GITHUB_WORKSPACE/config/release/decernor-ci-sha256.txt")
+          tar -xzf "$tool_dir/decernor_0.1.8_linux_amd64.tar.gz" -C "$tool_dir" decernor
+          echo "WAITPRIMS_DECERNOR_BIN=$tool_dir/decernor" >> "$GITHUB_ENV"
+      - name: Synthetic release regression controls
+        run: make release-tooling-test

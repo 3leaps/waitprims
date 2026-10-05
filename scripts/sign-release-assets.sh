@@ -12,37 +12,48 @@ set -euo pipefail
 
 TAG=${1:?"usage: sign-release-assets.sh <tag> [dir]"}
 DIR=${2:-dist/release}
+root="$(cd "$(dirname "$0")/.." && pwd -P)"
+source "$root/scripts/release-common.sh"
+export WAITPRIMS_RELEASE_TAG="$TAG"
+require_published_anchor "$DIR"
+"$root/scripts/validate-release-assets.sh" "$DIR" checksummed
+"$root/scripts/verify-checksums.sh" "$DIR"
+"$root/scripts/verify-staged-public.sh" "$DIR"
+if [[ -n "${WAITPRIMS_PGP_KEY_ID:-}" ]]; then
+    source "$root/scripts/release-tag-common.sh"
+    tag_key_selector
+fi
 
 if [ ! -d "$DIR" ]; then
-	echo "Error: Directory $DIR does not exist"
-	exit 1
+    echo "Error: Directory $DIR does not exist"
+    exit 1
 fi
 
 if [ -z "${WAITPRIMS_MINISIGN_KEY:-}" ]; then
-	echo "Error: WAITPRIMS_MINISIGN_KEY environment variable not set"
-	echo "Load the secure release-signing environment and retry."
-	exit 1
+    echo "Error: WAITPRIMS_MINISIGN_KEY environment variable not set"
+    echo "Load the secure release-signing environment and retry."
+    exit 1
 fi
 
 if [ ! -f "$WAITPRIMS_MINISIGN_KEY" ]; then
-	echo "Error: Configured minisign key is not a readable file"
-	exit 1
+    echo "Error: Configured minisign key is not a readable file"
+    exit 1
 fi
 
 cd "$DIR"
 
 MISSING=0
 for manifest in SHA256SUMS SHA512SUMS; do
-	if [ ! -f "$manifest" ]; then
-		echo "Error: $manifest not found in $DIR"
-		MISSING=$((MISSING + 1))
-	fi
+    if [ ! -f "$manifest" ]; then
+        echo "Error: $manifest not found in $DIR"
+        MISSING=$((MISSING + 1))
+    fi
 done
 if [ $MISSING -gt 0 ]; then
-	echo ""
-	echo "Did you forget to run checksums first?"
-	echo "  make release-checksums"
-	exit 1
+    echo ""
+    echo "Did you forget to run checksums first?"
+    echo "  make release-checksums"
+    exit 1
 fi
 
 echo "Signing release $TAG..."
@@ -51,40 +62,40 @@ echo ""
 echo "=== Minisign Signatures ==="
 
 for manifest in SHA256SUMS SHA512SUMS; do
-	if [ -f "$manifest" ]; then
-		echo "Signing $manifest with minisign..."
-		minisign -S -s "$WAITPRIMS_MINISIGN_KEY" \
-			-m "$manifest" \
-			-t "waitprims $TAG - $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-			-x "${manifest}.minisig"
-		echo "[ok] Created ${manifest}.minisig"
-	fi
+    if [ -f "$manifest" ]; then
+        echo "Signing $manifest with minisign..."
+        minisign -S -s "$WAITPRIMS_MINISIGN_KEY" \
+            -m "$manifest" \
+            -t "waitprims $TAG - $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -x "${manifest}.minisig"
+        echo "[ok] Created ${manifest}.minisig"
+    fi
 done
 
 if [ -n "${WAITPRIMS_PGP_KEY_ID:-}" ]; then
-	echo ""
-	echo "=== PGP Signatures ==="
+    echo ""
+    echo "=== PGP Signatures ==="
 
-	GPG_OPTS=()
-	if [ -n "${WAITPRIMS_GPG_HOMEDIR:-}" ]; then
-		GPG_OPTS+=("--homedir" "$WAITPRIMS_GPG_HOMEDIR")
-	fi
+    GPG_OPTS=()
+    if [ -n "${WAITPRIMS_GPG_HOMEDIR:-}" ]; then
+        GPG_OPTS+=("--homedir" "$WAITPRIMS_GPG_HOMEDIR")
+    fi
 
-	for manifest in SHA256SUMS SHA512SUMS; do
-		if [ -f "$manifest" ]; then
-			echo "Signing $manifest with PGP..."
-			gpg "${GPG_OPTS[@]}" \
-				--armor \
-				--detach-sign \
-				--local-user "$WAITPRIMS_PGP_KEY_ID" \
-				--output "${manifest}.asc" \
-				"$manifest"
-			echo "[ok] Created ${manifest}.asc"
-		fi
-	done
+    for manifest in SHA256SUMS SHA512SUMS; do
+        if [ -f "$manifest" ]; then
+            echo "Signing $manifest with PGP..."
+            gpg "${GPG_OPTS[@]}" \
+                --armor \
+                --detach-sign \
+                --local-user "$WAITPRIMS_PGP_KEY_ID" \
+                --output "${manifest}.asc" \
+                "$manifest"
+            echo "[ok] Created ${manifest}.asc"
+        fi
+    done
 else
-	echo ""
-	echo "[--] PGP signing skipped (WAITPRIMS_PGP_KEY_ID not set)"
+    echo ""
+    echo "[--] PGP signing skipped (WAITPRIMS_PGP_KEY_ID not set)"
 fi
 
 echo ""

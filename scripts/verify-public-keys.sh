@@ -1,72 +1,49 @@
 #!/usr/bin/env bash
-# Verify that exported keys contain only public material (no secrets)
-# Usage: verify-public-keys.sh [dir]
-#
-# Critical safety check before uploading to GitHub
+# Reject secret or malformed key material in the release set.
+
 set -euo pipefail
 
-DIR=${1:-dist/release}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/release-decernor.sh
+source "$SCRIPT_DIR/release-decernor.sh"
+resolve_release_decernor ceremony
+directory="${1:-dist/release}"
+minisign_public="$directory/waitprims-minisign.pub"
 
-if [ ! -d "$DIR" ]; then
-	echo "Error: Directory $DIR does not exist"
-	exit 1
+[[ -s "$minisign_public" && ! -L "$minisign_public" ]] || {
+    echo "error: exported minisign public key is missing or unsafe" >&2
+    exit 1
+}
+grep -q '^untrusted comment:' "$minisign_public" || {
+    echo "error: exported minisign public key is malformed" >&2
+    exit 1
+}
+if grep -qi 'secret' "$minisign_public"; then
+    echo "error: exported minisign material contains a secret marker" >&2
+    exit 1
 fi
 
-cd "$DIR"
-
-echo "Verifying public keys contain no secret material..."
-
-ERRORS=0
-
-echo ""
-echo "=== Minisign Key Check ==="
-
-if [ -f "waitprims-minisign.pub" ]; then
-	if grep -qi "secret" "waitprims-minisign.pub"; then
-		echo "[!!] DANGER: waitprims-minisign.pub may contain secret key material!"
-		ERRORS=$((ERRORS + 1))
-	elif grep -q "^untrusted comment:" "waitprims-minisign.pub"; then
-		echo "[ok] waitprims-minisign.pub appears to be a valid public key"
-	else
-		echo "[!!] waitprims-minisign.pub has unexpected format"
-		ERRORS=$((ERRORS + 1))
-	fi
-else
-	echo "[--] waitprims-minisign.pub not found"
+pgp_public="$directory/waitprims-release-signing-key.asc"
+[[ -s "$pgp_public" && ! -L "$pgp_public" ]] || {
+    echo "error: exported PGP key is unsafe" >&2
+    exit 1
+}
+grep -q 'BEGIN PGP PUBLIC KEY BLOCK' "$pgp_public" || {
+    echo "error: exported PGP key is malformed" >&2
+    exit 1
+}
+if grep -q 'PRIVATE KEY BLOCK' "$pgp_public"; then
+    echo "error: exported PGP material contains a private key" >&2
+    exit 1
 fi
-
-echo ""
-echo "=== PGP Key Check ==="
-
-if [ -f "waitprims-release-signing-key.asc" ]; then
-	if grep -q "PRIVATE KEY BLOCK" "waitprims-release-signing-key.asc"; then
-		echo "[!!] DANGER: waitprims-release-signing-key.asc contains PRIVATE KEY!"
-		ERRORS=$((ERRORS + 1))
-	elif grep -q "PUBLIC KEY BLOCK" "waitprims-release-signing-key.asc"; then
-		echo "[ok] waitprims-release-signing-key.asc is a public key"
-
-		GNUPGHOME=$(mktemp -d)
-		export GNUPGHOME
-		trap 'rm -rf "$GNUPGHOME"' EXIT
-
-		if gpg --import waitprims-release-signing-key.asc 2>/dev/null; then
-			echo "Key info:"
-			gpg --list-keys 2>/dev/null | grep -A1 "^pub" || true
-		fi
-	else
-		echo "[!!] waitprims-release-signing-key.asc has unexpected format"
-		ERRORS=$((ERRORS + 1))
-	fi
-else
-	echo "[--] waitprims-release-signing-key.asc not found"
-fi
-
-echo ""
-if [ $ERRORS -eq 0 ]; then
-	echo "[ok] Public key verification passed"
-	exit 0
-else
-	echo "[!!] CRITICAL: Found $ERRORS potential secret key exposures!"
-	echo "DO NOT upload these files to GitHub!"
-	exit 1
-fi
+for ext in txt ndjson; do
+    [[ -s "$directory/expected-fingerprints.$ext" && ! -L "$directory/expected-fingerprints.$ext" ]] || {
+        echo 'error: staged public anchor is missing or unsafe' >&2
+        exit 1
+    }
+done
+"$RELEASE_DECERNOR_BIN" fingerprint verify \
+    --anchors "$directory/expected-fingerprints.txt" \
+    --anchors-ndjson "$directory/expected-fingerprints.ndjson" \
+    --gpg "$pgp_public" --minisign "$minisign_public" >/dev/null
+echo "[ok] exported public keys contain public material only"

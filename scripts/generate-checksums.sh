@@ -1,84 +1,17 @@
 #!/usr/bin/env bash
-# Generate SHA256SUMS and SHA512SUMS checksum manifests
-# Usage: generate-checksums.sh [dir] [tag]
-#
-# Checksums only this tag's artifacts, licenses, and the copied
-# per-cut notes (docs/releases/vX.Y.Z.md → release-notes-<tag>.md).
-# Leftover files from an earlier cut are ignored (and reported).
+# Generate manifests only after complete public material is staged.
 set -euo pipefail
-
-DIR=${1:-dist/release}
-TAG=${2:-${WAITPRIMS_RELEASE_TAG:-${WAITPRIMS_RELEASE_KEY:-}}}
-
-if [ ! -d "$DIR" ]; then
-	echo "Error: Directory $DIR does not exist"
-	exit 1
-fi
-
-if [ -z "$TAG" ] || [ "$TAG" = "v" ]; then
-	echo "Error: No release tag. Pass the tag or load the release environment"
-	exit 1
-fi
-
-RELEASE_VERSION="${TAG#v}"
-NOTES="release-notes-${TAG}.md"
-
-cd "$DIR"
-
-if [ ! -f "$NOTES" ]; then
-	echo "Error: $NOTES not in $DIR"
-	echo "Copy RELEASE_NOTES.md before checksums so it is in the signed set:"
-	echo "  make release-notes"
-	exit 1
-fi
-
-echo "Generating checksums in $DIR for $TAG..."
-
-CHECKSUM_FILES=()
-for f in LICENSE-* \
-	"$NOTES" \
-	"sbom-${RELEASE_VERSION}.cdx.json" \
-	"waitprims-${RELEASE_VERSION}-"*.tar.gz \
-	"waitprims-${RELEASE_VERSION}-"*.zip; do
-	if [ -f "$f" ]; then
-		CHECKSUM_FILES+=("$f")
-	fi
-done
-
-if [ ${#CHECKSUM_FILES[@]} -eq 0 ]; then
-	echo "Error: no checksum candidates for $TAG in $DIR"
-	exit 1
-fi
-
-printf '%s\n' "${CHECKSUM_FILES[@]}" | LC_ALL=C sort | xargs shasum -a 256 >SHA256SUMS
-printf '%s\n' "${CHECKSUM_FILES[@]}" | LC_ALL=C sort | xargs shasum -a 512 >SHA512SUMS
-
-echo "Generated SHA256SUMS:"
-cat SHA256SUMS
-
-leftovers=0
-for f in release-notes-*.md sbom-*.json waitprims-*.tar.gz waitprims-*.zip; do
-	[ -e "$f" ] || continue
-	keep=0
-	for listed in "${CHECKSUM_FILES[@]}"; do
-		if [ "$f" = "$listed" ]; then
-			keep=1
-			break
-		fi
-	done
-	if [ "$keep" -eq 0 ]; then
-		if [ "$leftovers" -eq 0 ]; then
-			echo ""
-			echo "[--] leftover files not in this tag's checksum set:"
-		fi
-		echo "    $f"
-		leftovers=1
-	fi
-done
-if [ "$leftovers" -eq 1 ]; then
-	echo "    run: make release-clean && make release-download && make release-notes"
-fi
-
-echo ""
-echo "Generated SHA512SUMS"
-echo "[ok] Checksums generated"
+root="$(cd "$(dirname "$0")/.." && pwd -P)"
+source "$root/scripts/release-common.sh"
+directory="${1:-dist/release}"
+export WAITPRIMS_RELEASE_TAG="${2:-${WAITPRIMS_RELEASE_TAG:-}}"
+"$root/scripts/validate-release-assets.sh" "$directory" signable
+"$root/scripts/verify-public-keys.sh" "$directory"
+files=()
+while IFS= read -r name; do files+=("$name"); done < <(release_signable_assets | LC_ALL=C sort)
+(
+    cd "$directory"
+    shasum -a 256 "${files[@]}" >SHA256SUMS
+    shasum -a 512 "${files[@]}" >SHA512SUMS
+)
+"$root/scripts/verify-checksums.sh" "$directory"
