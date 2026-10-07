@@ -10,6 +10,7 @@ release-creation authority.
 - [ ] Independently approve the GPG primary, exact signing subkey and tagger
       identity, and the minisign public identity.
 - [ ] Supply the public GPG export at `docs/security/release-signing-keys.asc`,
+      the public minisign export at `docs/security/waitprims-minisign.pub`,
       the tagger identity at `config/release/tagger-identity.txt`, and the
       Decernor-derived pair at `keys/expected-fingerprints.txt` and `.ndjson`.
 - [ ] Set `WAITPRIMS_DECERNOR_BIN` to an approved absolute executable,
@@ -92,7 +93,9 @@ One canonical `vX.Y.Z` tag. Historical tags remain untouched.
       checks the artifact identity and complete five-platform set, and records
       run and attempt outside the staged asset directory.
 - [ ] `make release-export-keys` (also stages committed anchors and per-cut
-      notes), then `make release-checksums`. Both manifests cover exactly the
+      notes) extracts both public key files from the verified tagged commit;
+      `WAITPRIMS_MINISIGN_PUB` is an identity-preparation input, not a post-tag
+      asset source. Then `make release-checksums`. Both manifests cover exactly the
       five archives, SBOM, licenses, public exports, both anchors and cut notes.
 - [ ] `make release-create-draft` from the verified set. Existing releases and
       unknown API absence fail closed.

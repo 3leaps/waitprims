@@ -1,7 +1,7 @@
 ---
 id: PDR-0002
 title: Signed tags, read-only artifact CI and maintainer publication
-status: proposed
+status: accepted
 date: 2026-10-05
 scope: waitprims release process
 ---

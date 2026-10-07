@@ -26,6 +26,7 @@ import base64,pathlib,sys
 pathlib.Path(sys.argv[1]).write_text('untrusted comment: synthetic public key\n'+base64.b64encode(b'Ed'+b'\x01'*40).decode()+'\n')
 PY
 export WAITPRIMS_MINISIGN_PUB="$scratch/public.pub"
+cp "$scratch/public.pub" "$fixture/docs/security/waitprims-minisign.pub"
 "$fixture/scripts/release-insert-anchors.sh" >/dev/null
 printf 'historical cut\n' >"$fixture/docs/releases/v1.2.3.md"
 printf '1.2.3\n' >"$fixture/VERSION"
@@ -49,6 +50,7 @@ cp "$fixture/docs/releases/v1.2.3.md" "$scratch/assets/release-notes-v1.2.3.md"
 printf 'tag=v1.2.3\nobject=%040d\ncommit=%s\n' 1 "$commit" >"$scratch/assets.anchor"
 # Committed current operator trust data/version is deliberately different.
 printf 'gpg %040d\nminisign %064d\n' 0 0 >"$fixture/keys/expected-fingerprints.txt"
+printf 'newer public key\n' >"$fixture/docs/security/waitprims-minisign.pub"
 printf '9.0.0\n' >"$fixture/VERSION"
 git -C "$fixture" add -A
 git -C "$fixture" commit -qm 'newer operator state'

@@ -29,8 +29,6 @@ for ext in txt ndjson; do
     copy_blob "keys/expected-fingerprints.$ext" "$directory/expected-fingerprints.$ext"
 done
 copy_blob docs/security/release-signing-keys.asc "$directory/waitprims-release-signing-key.asc"
+copy_blob docs/security/waitprims-minisign.pub "$directory/waitprims-minisign.pub"
 copy_blob "docs/releases/$tag.md" "$directory/release-notes-$tag.md"
-: "${WAITPRIMS_MINISIGN_PUB:?explicit approved public minisign export required}"
-[[ -f "$WAITPRIMS_MINISIGN_PUB" && -s "$WAITPRIMS_MINISIGN_PUB" && ! -L "$WAITPRIMS_MINISIGN_PUB" && ! -L "$directory/waitprims-minisign.pub" ]]
-cp "$WAITPRIMS_MINISIGN_PUB" "$directory/waitprims-minisign.pub"
 "$root/scripts/verify-public-keys.sh" "$directory"

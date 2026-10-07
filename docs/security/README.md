@@ -8,6 +8,12 @@ public-blob fingerprint, through an independently trusted maintainer channel
 before accepting downloaded public keys. A key distributed beside a signature
 is not independent authentication.
 
+The public pins are [`release-signing-keys.asc`](release-signing-keys.asc) and
+[`waitprims-minisign.pub`](waitprims-minisign.pub). Release staging extracts both
+from the verified tagged commit as inert blobs, not from the current checkout
+or an external public-key locator. The asset `waitprims-minisign.pub` must match
+the committed file byte-for-byte; fingerprint verification remains required.
+
 The text and NDJSON anchors in each tagged commit use Decernor's
 `openpgp-fingerprint-v1` primary and `minisign-public-blob-sha256-v1` schemes.
 The minisign fingerprint covers the decoded public blob, not its comment or
