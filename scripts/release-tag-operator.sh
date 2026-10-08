@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# Maintainer entrypoint for message preparation, local signing and remote push.
+set -euo pipefail
+
+mode="${1:-}"
+case "$mode" in
+prepare-message | local-tag | remote-push) ;;
+*)
+    echo 'error: expected prepare-message, local-tag or remote-push' >&2
+    exit 1
+    ;;
+esac
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$root"
+# Check the sole tag input before an optional loader can use it to select a cut.
+: "${WAITPRIMS_RELEASE_TAG:?set the intended release tag before loading the environment}"
+[[ "$WAITPRIMS_RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
+    echo 'error: canonical release tag vX.Y.Z required' >&2
+    exit 1
+}
+[[ "$WAITPRIMS_RELEASE_TAG" == "v$(cat VERSION)" ]] || {
+    echo 'error: release tag must match VERSION' >&2
+    exit 1
+}
+export WAITPRIMS_RELEASE_TAG
+
+if [[ "${WAITPRIMS_APPROVED_ENV_LOADER+set}" == set ]]; then
+    loader="$WAITPRIMS_APPROVED_ENV_LOADER"
+    [[ "$loader" == /* && -f "$loader" && -r "$loader" && ! -L "$loader" ]] || {
+        echo 'error: approved external environment loader must be a readable absolute regular file' >&2
+        exit 1
+    }
+    loader_dir="$(cd "$(dirname "$loader")" && pwd -P)"
+    case "$loader_dir/" in "$root/" | "$root/"*)
+        echo 'error: approved environment loader must be outside the repository' >&2
+        exit 1
+        ;;
+    esac
+    # The approved operator script may set shell options. Hide its output and
+    # check its exit status before restoring strict mode for all later guards.
+    # shellcheck disable=SC1090
+    if source "$loader" >/dev/null 2>&1; then
+        loader_ok=1
+    else
+        loader_ok=0
+    fi
+    set -euo pipefail
+    [[ "$loader_ok" == 1 ]] || {
+        echo 'error: approved environment loader failed' >&2
+        exit 1
+    }
+fi
+
+# A sourced environment may change directory. Bind every guard to this repo.
+cd "$root" || {
+    echo 'error: repository root unavailable' >&2
+    exit 1
+}
+[[ "$(pwd -P)" == "$root" ]] || {
+    echo 'error: repository root changed' >&2
+    exit 1
+}
+[[ "${WAITPRIMS_RELEASE_TAG:-}" == "v$(cat VERSION)" ]] || {
+    echo 'error: loaded release tag differs from VERSION' >&2
+    exit 1
+}
+if [[ "$mode" == prepare-message ]]; then
+    export WAITPRIMS_RELEASE_TAG WAITPRIMS_TAG_MESSAGE_DIR
+    exec "$root/scripts/release-prepare-tag-message.py"
+fi
+export WAITPRIMS_RELEASE_TAG WAITPRIMS_TAG_MESSAGE_DIR \
+    WAITPRIMS_TAGGER_NAME WAITPRIMS_TAGGER_EMAIL \
+    WAITPRIMS_GPG_SIGNING_FINGERPRINT WAITPRIMS_PGP_KEY_ID \
+    WAITPRIMS_GPG_HOMEDIR
+
+# shellcheck source=scripts/release-tag-common.sh
+source "$root/scripts/release-tag-common.sh"
+tag_version
+tag_identity
+[[ "$(git symbolic-ref --quiet --short HEAD)" == main ]] || {
+    echo 'error: release tag targets require main' >&2
+    exit 1
+}
+tag_checkout
+[[ -z "$(git status --porcelain --untracked-files=all)" ]] || {
+    echo 'error: clean checkout required' >&2
+    exit 1
+}
+tag_key_selector
+tag_expected_message >/dev/null
+"$root/scripts/release-inspect-tag-ruleset.sh" "$WAITPRIMS_RELEASE_TAG"
+
+case "$mode" in
+local-tag) "$root/scripts/release-tag.sh" ;;
+remote-push) "$root/scripts/release-push-tag.sh" ;;
+esac

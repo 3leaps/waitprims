@@ -8,6 +8,46 @@
 
 ---
 
+## v0.2.3 — 2026-10-07
+
+Signed release provenance and publication controls. Library APIs and runtime
+behavior remain unchanged.
+
+### Highlights
+
+- Adopt [PDR-0002](docs/decisions/PDR-0002-release-publication.md): GPG-signed
+  annotated tags with independently approved primary and exact signing subkey,
+  read-only artifact CI, and separate maintainer signing/publication steps.
+- Commit public GPG/minisign pins, tagger identity and Decernor text/NDJSON
+  anchors. Release keys are staged from the verified tagged commit and must
+  match its public files byte-for-byte.
+- Bind artifact handoff to the annotated tag object, peeled commit and exact
+  successful workflow run/attempt. Compare every signed draft asset with the
+  verified local bytes before promotion; support bounded draft-upload retries.
+- Verify four local library archives on Cargo 1.88.0 using exact workspace
+  patches, without skipping archive verification. Registry dry-runs and uploads
+  remain unpatched, separately authorized and ordered core → async → testkit → fs.
+- Pin release actions and the SBOM image immutably, checksum the actionlint
+  download and move macOS jobs to macos-15. CI holds no signing keys or
+  release-creation authority and retains all five native CLI artifact targets.
+
+### Upgrade notes
+
+- Workspace crates move from 0.2.2 to 0.2.3; MSRV stays Rust 1.88.0.
+- No library API, runtime source or third-party crate pin changes.
+- Public JSON remains exactly the six `agent-wait/v0` message kinds.
+- The four library crates remain publishable; `waitprims-cli` stays unpublished.
+- Local patched archive success does not prove registry availability or waive
+  the unpatched predecessor/index checks. Publication archives need not be
+  byte-identical to the locally patched proof archives.
+- Historical tags remain untouched. Follow the
+  [release verification guide](docs/security/README.md) for public-key approval,
+  tag verification and signed-manifest checks.
+
+Full notes: [docs/releases/v0.2.3.md](docs/releases/v0.2.3.md)
+
+---
+
 ## v0.2.2 — 2026-09-01
 
 Native local-filesystem observation and a diagnostic command that exercises
@@ -73,30 +113,3 @@ squash commit as v0.2.1 and is included in this release.
 - Git users should pin `v0.2.1`; there is no `v0.2.0` tag.
 
 Full notes: [docs/releases/v0.2.1.md](docs/releases/v0.2.1.md)
-
----
-
-## v0.1.3 — 2026-08-18
-
-First crates.io cut for the library crates. No library API change
-is intended.
-
-### Highlights
-
-- `waitprims-core`, `waitprims-async`, and `waitprims-testkit` are
-  publishable. Workspace `publish` stays `false`; those three crates
-  opt in. Each has a README and a docs.rs URL.
-- `waitprims-cli` stays unpublished (diagnostic).
-- `make release-check` runs `cargo package --workspace`. That
-  packages all four workspace crates, including the unpublished
-  CLI, and does not publish.
-
-### Upgrade notes
-
-- No public API change.
-- Depend on the library crates from crates.io
-  (`waitprims-async = "0.1"`). A git tag pin still works.
-- Signing is local MFA (`make release-sign` / `make release`). CI
-  still drafts an unsigned GitHub release.
-
-Full notes: [docs/releases/v0.1.3.md](docs/releases/v0.1.3.md)

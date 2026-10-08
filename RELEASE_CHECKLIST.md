@@ -1,492 +1,179 @@
 # Release Checklist
 
-This document walks maintainers through the write/prep flow and the later
-maintainer MFA sign/upload flow for each waitprims release.
-
-waitprims is Rust only. There is no Go bindings workflow, no path-prefixed
-module tag, no TypeScript/npm/N-API publish, no FFI tarball, and no
-committed `.a`. CI never holds signing keys.
-
-## Prerequisites
-
-- GPG and minisign installed
-- Signing keys configured (shared 3leaps release signing keys)
-- Secure release environment loaded (see section 3). Required:
-  `WAITPRIMS_RELEASE_KEY`, `WAITPRIMS_MINISIGN_KEY`, and
-  `WAITPRIMS_MINISIGN_PUB`; PGP variables are optional
-- `gh` CLI authenticated with push access
-
-## 1. Write / prep
-
-### Version and documentation
-
-- [ ] Update `VERSION` file with the new semver (for example `0.1.1`)
-- [ ] Sync version to Cargo.toml: `make version-sync`
-  - Syncs `[workspace.package].version`, path-dependency versions, and
-    `Cargo.lock`
-  - **Do not skip**: version drift between `VERSION` and `Cargo.toml` is a
-    hard failure in `make prepush`
-- [ ] Update `CHANGELOG.md`
-  - **Do not skip footer links**: add `[X.Y.Z]` compare link and re-anchor
-    `[Unreleased]` to compare from the new tag to `HEAD`
-- [ ] Update `RELEASE_NOTES.md` (latest three cuts, newest first).
-      This file is the landing page. It is **not** copied whole
-      into the signed set.
-- [ ] Create `docs/releases/vX.Y.Z.md` by extracting **that
-      version's section only** from `RELEASE_NOTES.md` (same
-      pattern as sysprims / ipcprims). Do not paste the other
-      two cuts. This per-cut file is the signed / GitHub payload.
-
-### Pre-tag quality gates
-
-- [ ] **Run preflight checks**: `make release-preflight`
-
-  This is the single authoritative gate. It runs, in order:
-  1. Working tree clean check
-  2. `make pr-final` — `prepush` (fmt, clippy, locked tests, **version consistency**)
-  3. `make version-check` — `VERSION`, `Cargo.toml`, crate workspace versions
-  4. `RELEASE_NOTES.md` has a `## vX.Y.Z` heading;
-     `docs/releases/vX.Y.Z.md` is that section only
-  5. Local/remote sync (no unpushed or unpulled commits)
-
-  **Must pass before pushing or tagging.**
-
-- [ ] Optional package check (does **not** publish): `make release-check`
-
-### Commit and push to main
-
-- [ ] Commit the release-prep content:
-
-  ```bash
-  git add VERSION Cargo.toml Cargo.lock CHANGELOG.md RELEASE_NOTES.md docs/releases
-  git commit -m "chore: bump version to vX.Y.Z"
-  ```
-
-  The commit message must say `vX.Y.Z` (the real version), not `vX.Y.Z-dev`.
-
-- [ ] Push to main:
-
-  ```bash
-  git push origin main
-  ```
-
-### CI verification on main (required before tagging)
-
-**Do not tag until CI on `main` is green.** Tagging a broken commit creates
-an unusable release.
-
-- [ ] Monitor CI:
-
-  ```bash
-  gh run list --branch main --limit 3
-  gh run watch <run-id>
-  ```
-
-- [ ] Confirm the required `fast` gate is green
-
-### Create and push the tag
-
-One annotated `v*` tag. Do not add a path-prefixed module tag.
-
-- [ ] Create the annotated tag:
-
-  ```bash
-  : "${WAITPRIMS_RELEASE_KEY:?load the release environment}"
-  WAITPRIMS_RELEASE_TAG="$WAITPRIMS_RELEASE_KEY" make release-guard-tag-version
-  git tag -a "$WAITPRIMS_RELEASE_KEY" \
-    -m "$WAITPRIMS_RELEASE_KEY: <brief description of release>"
-  ```
-
-- [ ] Push the tag (triggers the release workflow):
-
-  ```bash
-  git push origin "$WAITPRIMS_RELEASE_KEY"
-  ```
-
-  `WAITPRIMS_RELEASE_KEY` is already the canonical `vX.Y.Z` tag. Do not
-  copy it into a generic `VERSION` environment variable and do not prepend
-  another `v`.
-
-### CI verification on the tag
-
-- [ ] Required **CI** workflow on the tag is green
-      (`gh run list --branch "$WAITPRIMS_RELEASE_KEY"`)
-- [ ] The **Release** workflow drafts the GitHub release. On MSRV,
-      `cargo package --workspace` cannot prepare dependents until
-      this `VERSION` of `waitprims-core` is on crates.io. If Package
-      Check fails for that reason, do **section 2** (registry
-      publish), then re-run the Release workflow. Do not sign until
-      a draft exists.
-
-See [PDR-0001](docs/decisions/PDR-0001-crates-io-after-tag.md).
-
-## 2. crates.io (library crates only, after the tag)
-
-Do this **after the git tag is on `origin`**, and **before** treating
-the GitHub Release workflow as green. The principal or Echo lead
-still cues the upload. Token and owners stay out of the tree.
-
-`make release-check` / `cargo package --workspace` creates and
-verifies local tarballs. That is **not** a registry upload.
-
-### What gets published
-
-| Crate | crates.io |
-|-------|-----------|
-| `waitprims-core` | yes (first) |
-| `waitprims-async` | yes (after core is on the index) |
-| `waitprims-testkit` | yes (after async is on the index) |
-| `waitprims-fs` | yes (after testkit; name-slot check first) |
-| `waitprims-cli` | **never** (`publish = false`) |
-
-Workspace `publish` stays `false`. The four libraries opt in.
-
-### First cut vs later cuts
-
-- **First upload of a crate name:** publish **only** this tag's
-  `VERSION`. Older git tags are **not** backfilled.
-- **Later cuts:** publish the new `VERSION` only. Older registry
-  versions stay. A version cannot be overwritten; a mistake is a
-  new patch (or a yank, which does not delete the tarball).
-- On later cuts, Package Check can succeed before this section
-  because the previous core version is already on the index.
-  Still publish **after the tag**, so the registry version matches
-  the git tag.
-
-### Tokens
-
-Use a crates.io token scoped to the four library crate names. Do
-not reuse a Fulmen / other-org token.
-
-| Token | Endpoint scopes | When |
-|-------|-----------------|------|
-| new + update | `publish-new`, `publish-update` | first upload of a crate name |
-| update only | `publish-update` | later versions of crates that already exist |
-
-No `yank` unless a separate playbook says so. Expiry 30–90 days.
-Store as `CARGO_REGISTRY_TOKEN_3LEAPS` (or a `_NEW` sibling) in a
-secure external secret store — not in this repo.
-
-### Publish steps (cued)
-
-From a clean checkout of the **tag** (not a dirty worktree):
-
-```bash
-: "${WAITPRIMS_RELEASE_KEY:?load the release environment}"
-git checkout "$WAITPRIMS_RELEASE_KEY"
-release_version=$(tr -d ' \t\r\n' < VERSION)
-WAITPRIMS_REQUIRE_TAG=1 make release-guard-tag-version
-cargo publish --dry-run -p waitprims-core
-cargo publish -p waitprims-core
-cargo info --registry crates-io "waitprims-core@${release_version}"
-cargo publish --dry-run -p waitprims-async
-cargo publish -p waitprims-async
-cargo info --registry crates-io "waitprims-async@${release_version}"
-cargo publish --dry-run -p waitprims-testkit
-cargo publish -p waitprims-testkit
-cargo info --registry crates-io "waitprims-testkit@${release_version}"
-cargo info --registry crates-io waitprims-fs
-# For the first waitprims-fs upload, confirm the name is still unclaimed.
-cargo publish --dry-run -p waitprims-fs
-cargo publish -p waitprims-fs
-cargo info --registry crates-io "waitprims-fs@${release_version}"
-```
-
-Each `cargo publish` is a separate irreversible gate. Reconfirm the current
-authorization immediately before every upload. A later stop or hold supersedes
-an earlier cue; do not continue merely because the whole sequence was
-previously authorized.
-
-- [ ] Dry-run then publish **core**, wait for the index, then **async**,
-      wait for the index, then **testkit**, wait for the index, then
-      name-slot check and publish **fs**
-- [ ] Immediately before the first `waitprims-fs` publish, run
-      `cargo info --registry crates-io waitprims-fs` and confirm the
-      crate name is still unclaimed. Stop if it resolves to another owner.
-- [ ] Do **not** `cargo publish -p waitprims-cli` (must fail closed:
-      `cannot be published`)
-- [ ] Confirm each predecessor with
-      `cargo info --registry crates-io <crate>@<version>`
-      before the next publish. Bare `cargo info` can hit the local
-      workspace and is not an index proof.
-- [ ] If the tag Release workflow failed Package Check, re-run it
-      after the index has this VERSION
-
-Negative control (optional):
-
-```bash
-cargo publish --dry-run -p waitprims-cli
-# expected: error, crate cannot be published
-```
-
-### After upload
-
-Consumers can replace a git tag pin with:
-
-```toml
-waitprims-core = "0.2"
-waitprims-async = "0.2"
-waitprims-testkit = "0.2"
-waitprims-fs = "0.2"
-```
-
-docs.rs builds from the crates.io tarball. Evergreen README install
-text becomes true only after this step.
-
-## 3. Maintainer MFA sign / upload (local machine)
-
-> **Note**: MFA is required for signing. Signing keys are protected by
-> hardware token. The maintainer must be physically present to complete
-> this step.
-
-### Set environment variables
-
-Load the operator's secure release environment. This repository intentionally
-does not prescribe host-local secret paths. From a clean worktree, fetch and
-check out the exact release tag before running the strict guard. Confirm
-environment presence without printing values:
-
-```bash
-: "${WAITPRIMS_RELEASE_KEY:?missing approved release key}"
-: "${WAITPRIMS_MINISIGN_KEY:?missing approved minisign secret key}"
-: "${WAITPRIMS_MINISIGN_PUB:?missing approved minisign public key}"
-test -z "$(git status --porcelain)" || {
-  echo "error: release signing requires a clean worktree" >&2
-  exit 1
-}
-git fetch origin \
-  "refs/tags/${WAITPRIMS_RELEASE_KEY}:refs/tags/${WAITPRIMS_RELEASE_KEY}"
-git checkout --detach "$WAITPRIMS_RELEASE_KEY"
-WAITPRIMS_REQUIRE_TAG=1 make release-guard-tag-version
-```
-
-`WAITPRIMS_RELEASE_KEY` is the canonical `vX.Y.Z` tag and is consumed directly
-by the Makefile. The strict guard confirms that the tag is annotated, matches
-`VERSION`, and points at `HEAD`; the signing steps therefore source per-cut
-notes from the tagged tree. `WAITPRIMS_PGP_KEY_ID` and
-`WAITPRIMS_GPG_HOMEDIR` are optional. Never paste environment values or
-signing-command transcripts into issues, pull requests, or chat.
-
-### Signing steps
-
-1. **Clean previous release artifacts**
-
-   ```bash
-   make release-clean
-   ```
-
-2. **Download artifacts from GitHub release**
-
-   ```bash
-   make release-download
-   ```
-
-3. **Copy the per-cut notes into dist** (before checksums)
-
-   ```bash
-   make release-notes
-   ```
-
-   Copies `docs/releases/vX.Y.Z.md` to
-   `dist/release/release-notes-vX.Y.Z.md`. That file is the
-   **this-release** section extracted from `RELEASE_NOTES.md` during
-   the release PR — not the whole landing page. Missing per-cut notes
-   is a hard failure. Do not copy notes after signing. Start from
-   `make release-clean` so leftover `release-notes-v*` files from an
-   earlier cut are not sitting in `dist/release/`.
-
-4. **Generate checksum manifests**
-
-   ```bash
-   make release-checksums
-   ```
-
-   Produces: `SHA256SUMS`, `SHA512SUMS` covering **this tag's** archives,
-   SBOM, licenses, and `release-notes-vX.Y.Z.md`. Leftover files from
-   an earlier cut are omitted and reported.
-
-5. **Sign checksum manifests** (minisign, plus PGP when configured)
-
-   ```bash
-   make release-sign
-   ```
-
-   Produces `.minisig` signatures for both checksum files. When
-   `WAITPRIMS_PGP_KEY_ID` is configured, also produces `.asc` signatures.
-
-6. **Export public keys**
-
-   ```bash
-   make release-export-keys
-   ```
-
-   Produces `waitprims-minisign.pub` and, when PGP is configured,
-   `waitprims-release-signing-key.asc`.
-
-7. **Verify everything before upload**
-
-   ```bash
-   make release-verify
-   ```
-
-   Validates:
-   - Checksums match artifacts (including release notes)
-   - Signatures verify correctly
-   - Exported keys are public-only (no secret key material)
-
-8. **Upload signed artifacts to GitHub**
-
-   ```bash
-   make release-upload
-   ```
-
-   Uses `--clobber` to overwrite existing assets. Safe to rerun.
-   Leaves the release as a draft. Uploaded notes are the same file
-   already covered by the signed checksums.
-
-9. **Publish the release** (promotes draft → public):
-
-   ```bash
-   gh release edit "$WAITPRIMS_RELEASE_KEY" --draft=false
-   ```
-
-   The release is a draft until this step. Do not announce until after this.
-
-Leaf targets do **not** depend on earlier write stages. `make
-release-export-keys` (or any mid-chain target) must not wipe
-`dist/release/` or re-download. Only `make release` walks the full
-sequence.
-
-Or run the full signing + upload workflow in one command:
-
-```bash
-make release
-# Then manually publish the draft:
-gh release edit "$WAITPRIMS_RELEASE_KEY" --draft=false
-```
-
-## 4. Post-release verification
-
-- [ ] Verify the release is public: `gh release view v$(cat VERSION)`
-- [ ] Verify checksums match: download and verify locally
-- [ ] Verify signatures with public keys
-- [ ] After a crates.io cue: each library crate has this VERSION
-      (`cargo info --registry crates-io waitprims-core@<version>`,
-      same for async, testkit, and fs). Bare `cargo info` can resolve the
-      workspace and is not an index proof. Search is not a
-      version-history proof; no-backfill is policy (section 2).
-
-### Verification example
-
-```bash
-: "${WAITPRIMS_RELEASE_KEY:?load the release environment}"
-release_version=${WAITPRIMS_RELEASE_KEY#v}
-
-curl -LO "https://github.com/3leaps/waitprims/releases/download/${WAITPRIMS_RELEASE_KEY}/SHA256SUMS"
-curl -LO "https://github.com/3leaps/waitprims/releases/download/${WAITPRIMS_RELEASE_KEY}/SHA256SUMS.minisig"
-curl -LO "https://github.com/3leaps/waitprims/releases/download/${WAITPRIMS_RELEASE_KEY}/waitprims-minisign.pub"
-
-shasum -a 256 -c SHA256SUMS --ignore-missing
-minisign -Vm SHA256SUMS -p waitprims-minisign.pub
-```
-
-## 5. Post-release state
-
-Do **not** bump `VERSION` after a release. `VERSION`, the workspace package
-version, internal dependency pins, and `Cargo.lock` remain at the latest
-released version until the next release-preparation pack.
-
-Development builds from later commits may therefore report the latest release
-version while the working tree or commit differs from the release tag. Use the
-Git commit identity to distinguish those builds. The project does not use a
-`v<next-semver>-dev` convention.
-
-The next version change is made during the next release preparation by running
-the appropriate `make version-patch`, `make version-minor`, or
-`make version-major` target, followed immediately by `make version-sync` and
-the release documentation updates required by the pre-tag gate.
-
-## Quick reference: all release targets
-
-| Target                           | Description                                                                    |
-| -------------------------------- | ------------------------------------------------------------------------------ |
-| `make release-preflight`         | **REQUIRED**: Verify pre-tag requirements (tree, checks, version, notes, sync) |
-| `make release-guard-tag-version` | Verify git tag matches VERSION file (runs automatically in `make release`)     |
-| `make release-check`             | Version consistency + `cargo package` (does not publish)                       |
-| `make release-clean`             | Remove dist/release contents                                                   |
-| `make release-download`          | Download CI artifacts from GitHub                                              |
-| `make release-checksums`         | Generate SHA256SUMS and SHA512SUMS                                             |
-| `make release-sign`              | Sign checksums with minisign + PGP (requires MFA/hardware token)               |
-| `make release-export-keys`       | Export public signing keys                                                     |
-| `make release-verify`            | Verify checksums, signatures, and keys                                         |
-| `make release-notes`             | Copy `docs/releases/vX.Y.Z.md` into dist **before** checksums (signed set)     |
-| `make release-upload`            | Upload signed artifacts to GitHub                                              |
-| `make release`                   | Full workflow (clean -> upload)                                                |
-
-## Troubleshooting
-
-### "WAITPRIMS_MINISIGN_KEY not set"
-
-Load the operator's secure release-signing environment. Do not invent or
-publish a host-local key path.
-
-### "No release notes found"
-
-`RELEASE_NOTES.md` is the landing page (latest three cuts). The signed
-payload is the **this-cut** extract at `docs/releases/vX.Y.Z.md`.
-
-```bash
-# Landing page (purge to three cuts)
-# Edit RELEASE_NOTES.md — heading must be `## vX.Y.Z`
-
-# Per-cut extract (what make release-notes copies)
-mkdir -p docs/releases
-# Copy only the vX.Y.Z section from RELEASE_NOTES.md into
-# docs/releases/vX.Y.Z.md (promote the heading to `# vX.Y.Z`).
-```
-
-### Version mismatch in prepush or preflight
-
-```bash
-make version-sync
-make version-check
-```
-
-### CI on main failed before tagging
-
-1. Fix the issue on main, push the fix
-2. Wait for CI to go green
-3. Only then proceed to tag
-
-### CI on tag failed after tagging
-
-1. Check GitHub Actions logs: `gh run list --branch "v${VERSION}"`
-2. Fix the issue on main
-3. Delete the tag and release draft:
-
-   ```bash
-   git tag -d "v${VERSION}"
-   git push origin --delete "v${VERSION}"
-   gh release delete "v${VERSION}" --yes
-   ```
-
-4. Start over from the tagging step
-
-### Signature verification failed
-
-1. Ensure you used the correct signing key
-2. Re-run `make release-sign`
-3. Re-run `make release-verify` to confirm
-
-## Key rotation
-
-If rotating signing keys, update:
-
-- [ ] `RELEASE_CHECKLIST.md` — verification example
-- [ ] `README.md` — verification snippet (when added)
-
-## Versioning policy
-
-- **Patch** (0.1.2): Bug fixes, security patches
-- **Minor** (0.2.0): New features, backward-compatible
-- **Major** (1.0.0): Breaking changes, API changes
+waitprims publishes four Rust libraries and diagnostic CLI archives for five
+native platforms. The CLI stays unpublished on crates.io. Signing and
+publication are separate maintainer operations. CI holds no signing keys or
+release-creation authority.
+
+## Public identity preparation
+
+- [ ] Independently approve the GPG primary, exact signing subkey and tagger
+      identity, and the minisign public identity.
+- [ ] Supply the public GPG export at `docs/security/release-signing-keys.asc`,
+      the public minisign export at `docs/security/waitprims-minisign.pub`,
+      the tagger identity at `config/release/tagger-identity.txt`, and the
+      Decernor-derived pair at `keys/expected-fingerprints.txt` and `.ndjson`.
+- [ ] Set `WAITPRIMS_DECERNOR_BIN` to an approved absolute executable,
+      Decernor 0.1.8 or newer. Ceremony calls never fall back to PATH.
+- [ ] Use `make release-export-pin` for a new pin and
+      `make release-validate-pin` to inspect public-only exports. Configure
+      `WAITPRIMS_GPG_SIGNING_FINGERPRINT` independently of the repository;
+      `WAITPRIMS_PGP_KEY_ID` is the exact uppercase signing-subkey fingerprint
+      followed by `!`. `WAITPRIMS_GPG_HOMEDIR` is an approved external home.
+      Agents inspect public output only.
+- [ ] Derive anchors with `make release-insert-anchors`. Existing anchors refuse
+      overwrite. A separately reviewed rotation requires the explicit
+      `WAITPRIMS_ALLOW_ANCHOR_ROTATION=1` cue; it preserves historical tags.
+- [ ] Review committed pin, text/NDJSON agreement and exact subkey separately
+      from tooling changes. Missing public identity fails closed.
+- [ ] Register the public signing key on the approved GitHub account. Verify
+      repository Actions defaults and `v*` create/update/delete protection.
+      `release-inspect-tag-ruleset.sh` reports FOUND / ABSENT / UNKNOWN; it is
+      advisory, not enforcement. Default read permission is not a ceiling on
+      explicit workflow permissions.
+
+## Prepare the release commit
+
+- [ ] Update VERSION, then `make version-sync`; all internal path version pins
+      and workspace lock entries match the cut. Keep MSRV 1.88.0.
+- [ ] Update CHANGELOG including compare links, RELEASE_NOTES.md (latest three
+      cuts), and `docs/releases/vX.Y.Z.md` containing only this cut.
+- [ ] Run `make pr-final`, `make release-tooling-test`, actionlint and
+      `make release-check` on the exact candidate.
+      The package check uses exact local workspace patches on Cargo 1.88;
+      normalized archives carry registry version requirements, no paths or
+      patches. It verifies local packages, not registry availability.
+- [ ] Obtain independent review on the exact candidate and public anchors.
+- [ ] After an explicit remote cue, merge through the reviewed PR and confirm
+      required main CI at the exact merged release commit, including native
+      smoke coverage. No release tag before green main.
+- [ ] Run `make release-preflight` from clean synchronized main. It checks
+      tree, pr-final, version, per-cut notes and local/remote posture.
+
+## Prepare, sign and push the annotated tag
+
+One canonical `vX.Y.Z` tag. Historical tags remain untouched.
+
+- [ ] Set `WAITPRIMS_RELEASE_TAG` explicitly. `WAITPRIMS_RELEASE_KEY` remains a
+      compatibility input; it already includes `v`.
+- [ ] Set `WAITPRIMS_TAG_MESSAGE_DIR` to an external absolute directory ending
+      in the tag, with no symlink ancestors. Run
+      `make release-prepare-tag-message`; review `message.txt`. Existing messages
+      are preserved. An optional approved external environment loader is
+      `WAITPRIMS_APPROVED_ENV_LOADER`; it must be a readable regular file outside
+      the repository.
+- [ ] Configure `WAITPRIMS_TAGGER_NAME` and `WAITPRIMS_TAGGER_EMAIL` to the
+      committed identity, independently approved primary and exact subkey.
+- [ ] Maintainer executes `make release-tag`. GPG signs the annotated tag;
+      minisign signs the later checksum manifests. Verify local tag/message
+      against committed inert public material using an isolated keyring.
+- [ ] After a separate push cue, maintainer executes `make release-push-tag`.
+      Record annotated object and peeled commit. GitHub must report Verified
+      with reason `valid`, in addition to approved-primary and exact-subkey
+      verification.
+- [ ] Record the original approved annotated object and peeled commit in an
+      external `WAITPRIMS_RELEASE_ANCHOR_FILE`. Set
+      `WAITPRIMS_EXPECTED_TAG_OBJECT` and `WAITPRIMS_EXPECTED_COMMIT` to the
+      independently recorded signing/push identities, then run
+      `make release-record-anchor`. It verifies those exact inputs and refuses
+      an existing destination. Retain this original file across every separately
+      cued registry dry-run/upload; never replace it with a fresh tag lookup.
+
+## Read-only CI and local artifact handoff
+
+- [ ] Confirm the tag's successful Release workflow. It verifies consistency,
+      builds five native CLI archives, generates SBOM and uploads artifacts.
+      It creates no GitHub release and publishes no crates.
+- [ ] Select the exact successful run with `WAITPRIMS_RELEASE_RUN_ID` when
+      multiple runs exist. `WAITPRIMS_RELEASE_RUN_ATTEMPT` optionally asserts
+      the current downloadable attempt. Earlier attempts require explicit
+      rerun/reselection; expired artifacts require an unchanged-tag rerun.
+- [ ] `make release-clean`, then `make release-download`. The trusted operator
+      checkout re-verifies the approved remote tag and both object/commit,
+      checks the artifact identity and complete five-platform set, and records
+      run and attempt outside the staged asset directory.
+- [ ] `make release-export-keys` (also stages committed anchors and per-cut
+      notes) extracts both public key files from the verified tagged commit;
+      `WAITPRIMS_MINISIGN_PUB` is an identity-preparation input, not a post-tag
+      asset source. Then `make release-checksums`. Both manifests cover exactly the
+      five archives, SBOM, licenses, public exports, both anchors and cut notes.
+- [ ] `make release-create-draft` from the verified set. Existing releases and
+      unknown API absence fail closed.
+- [ ] Maintainer executes `make release-sign` with the approved minisign secret
+      locator (`WAITPRIMS_MINISIGN_KEY`); optional PGP manifest signing requires
+      the complete approved GPG selector/home. Hardware-token/MFA remains local.
+- [ ] `make release-verify`, then `make release-upload`. Required signatures,
+      exact checksums and staged-versus-committed public material must verify.
+      Partial or completed uploads may be retried only while the release remains
+      a draft at the same tag/target and every existing name is in the approved
+      signed inventory. All approved local files are uploaded again; unexpected
+      remote names fail closed.
+- [ ] Separately cue `make release-publish`. It re-verifies remote tag identity,
+      exact local signed set, exact remote draft inventory and byte-for-byte
+      agreement of every remote asset (including manifests/signatures) before
+      promotion.
+      Never replace a published release or move its tag.
+
+`make release` serializes clean → download → public material → checksums →
+draft → sign → upload. It leaves a draft. Leaf targets do not clean or redownload.
+Post-tag gates run trusted operator code and read tagged files only as inert
+Git objects. Later main VERSION changes do not strand an older tagged release.
+Mutable ref races between verification and API calls remain a residual.
+
+## crates.io: separate maintainer cues
+
+The signed remote tag is a prerequisite for every registry operation.
+No blanket upload loop is supplied. Keep the trusted reviewed operator
+checkout clean; it may be newer than the release. Perform one dry-run and one
+separately authorized upload at a time, using Cargo 1.88.0 and no local patches.
+Every operation requires the original external ceremony anchor above. Trusted
+operator code verifies its object/commit, stages the authenticated source in a
+temporary detached worktree, validates configuration and metadata, and runs
+Cargo there. No tagged release-guard script is executed:
+
+| Order | Crate | Indexed predecessors |
+| --- | --- | --- |
+| 1 | waitprims-core | none |
+| 2 | waitprims-async | core |
+| 3 | waitprims-testkit | core, async |
+| 4 | waitprims-fs | core, async, testkit (dev dependency) |
+
+For each crate, `scripts/release-crates-dry-run.sh <crate>` verifies the approved
+signed tag against the original ceremony anchor, verified staged source and indexed predecessors, then runs an
+unpatched `cargo publish --dry-run --locked`. After the specific upload cue,
+re-run `make release-verify-remote-tag` immediately before the maintainer's
+`scripts/release-crates-publish.sh <crate>` (one upload, repeated unpatched
+dry-run, signed-tag/configuration checks, then index confirmation). A later HOLD supersedes an earlier
+cue. After each upload use
+`cargo +1.88.0 info --registry crates-io <crate>@<version>` before the next.
+An older registry version does not satisfy the new cut's version requirement.
+Inherited Cargo `paths`, patch/replace/source/include and registry-index
+substitutions are rejected in both operator and staged-source contexts. Local
+patched package success does not waive this gate.
+
+Tokens remain in an external secret store, scoped to the four library names.
+Use update-only tokens for existing names; new-name authorization is separate.
+No backfill, yanks or CLI publication. Every upload is irreversible and cued
+separately. Tag CI and artifact signing need no registry upload to complete.
+
+## Completion and consumer verification
+
+- [ ] Verify published release, downloaded exact assets and both checksum
+      signatures against independently approved fingerprints.
+- [ ] Confirm remote annotated object/commit, approved primary/exact subkey and
+      GitHub Verified `valid`.
+- [ ] Confirm all four exact registry versions and docs.rs results.
+- [ ] Keep VERSION/workspace/path pins/lock at the released version afterward.
+      Change them only in the next release-preparation pack.
+
+See [consumer verification](docs/security/README.md) and
+[PDR-0002](docs/decisions/PDR-0002-release-publication.md).
+
+## Recovery
+
+For missing workflow artifacts, re-run CI on the unchanged tag and explicitly
+reselect its successful run/attempt. A source correction requires a new patch
+version. Never delete/recreate a released tag. Signature or inventory failures
+stop upload/promotion; restore the exact verified set and review any identity
+change before retrying. Unknown ruleset/default-permission evidence is not a
+policy pass.

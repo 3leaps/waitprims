@@ -71,15 +71,18 @@ help: ## Show available targets
 	@echo ""
 	@echo "Release:"
 	@echo "  release-preflight  Verify all pre-tag requirements (REQUIRED before tagging)"
-	@echo "  release-check      Version consistency + cargo package (does not publish)"
+	@echo "  release-check      Verify exact local library archives (does not publish)"
 	@echo "  release-clean      Remove dist/release contents"
-	@echo "  release-download   Download release assets from GitHub"
+	@echo "  release-download   Fetch exact successful workflow artifacts"
 	@echo "  release-checksums  Generate SHA256SUMS and SHA512SUMS"
 	@echo "  release-sign       Sign checksum manifests (minisign + PGP)"
 	@echo "  release-export-keys Export public signing keys"
 	@echo "  release-verify     Verify checksums, signatures, and keys"
 	@echo "  release-notes      Copy docs/releases/vX.Y.Z.md into dist (before checksums)"
 	@echo "  release-upload     Upload signed artifacts to GitHub"
+	@echo "  release-publish    Promote verified signed draft (maintainer)"
+	@echo "  release-tooling-test Synthetic release regression controls"
+	@echo "  release-prepare-tag-message / release-tag / release-push-tag"
 	@echo "  release            Full signing workflow (clean -> upload)"
 	@echo ""
 	@echo "Version management:"
@@ -232,13 +235,13 @@ version-check: ## Validate version consistency across files
 #
 # Workflow:
 # 1. Pre-tag: make release-preflight
-# 2. Tag and push: git tag vX.Y.Z && git push origin vX.Y.Z
-# 3. Wait for GitHub Actions release workflow to create a draft release
+# 2. Maintainer message, GPG-signed annotated tag and separate verified push
+# 3. Read-only tag CI stages workflow artifacts; maintainer creates the draft
 # 4. Sign locally: make release (or individual leaf targets)
 #
 # Leaf targets have no write-chain precursors (same as sysprims).
 # Only `make release` walks clean → download → notes → checksums →
-# sign → export-keys → upload (verify once via upload).
+# public material → checksums → draft → sign → upload (verify via upload).
 # `make release-export-keys` must not re-clean or re-download.
 #
 # Environment variables:
@@ -251,28 +254,44 @@ version-check: ## Validate version consistency across files
 #
 # CI never holds signing keys. MFA / hardware-token signing is local.
 
-release-check: version-check ## Version consistency + package check (does not publish)
-	@echo "Checking release readiness..."
-	@echo ""
-	@echo "Packaging workspace crates (does not cargo publish)..."
-	@# Same gate as ipcprims: cargo package --workspace verifies
-	@# dependents from a local tmp registry. Workspace publish stays
-	@# false; libraries opt in. The CLI is packaged here but not
-	@# publishable.
-	@$(CARGO) package --workspace
-	@echo "[ok] Package check passed"
-	@echo ""
-	@echo "Release checklist:"
-	@echo "  ✓ Version consistency validated"
-	@echo "  ✓ Package check passed"
-	@echo "  ✓ cargo publish was not run"
-	@echo ""
-	@echo "Next steps:"
-	@echo "  1. make release-preflight"
-	@echo "  2. git tag v$$(tr -d ' \t\r\n' < $(VERSION_FILE))"
-	@echo "  3. git push origin v$$(tr -d ' \t\r\n' < $(VERSION_FILE))"
-	@echo "  4. Wait for CI + release workflow"
-	@echo "  5. make release (sign + upload)"
+release-check: version-check ## Verify local library archives with exact workspace patches
+	./scripts/check-packages.sh
+
+release-tooling-test: ## Synthetic release regression controls
+	./scripts/release-tooling-test.sh
+
+release-prepare-tag-message: ## Prepare external message for maintainer review
+	./scripts/release-tag-operator.sh prepare-message
+
+release-tag: ## Maintainer local GPG-signed annotated tag
+	./scripts/release-tag-operator.sh local-tag
+
+release-push-tag: ## Maintainer separate verified tag push
+	./scripts/release-tag-operator.sh remote-push
+
+release-verify-tag: ## Verify local signed annotated tag
+	./scripts/release-verify-tag.sh
+
+release-verify-remote-tag: ## Verify approved signed remote tag
+	./scripts/release-verify-published-tag.sh
+
+release-record-anchor: ## Record original approved tag object and commit
+	./scripts/release-record-anchor.sh
+
+release-export-pin: ## Maintainer public pin export (refuses overwrite)
+	./scripts/release-export-pin.sh
+
+release-validate-pin: ## Validate independently approved public exports
+	./scripts/release-validate-pin.sh
+
+release-insert-anchors: ## Maintainer Decernor public anchor derivation
+	./scripts/release-insert-anchors.sh
+
+release-create-draft: ## Maintainer draft from verified staged assets
+	./scripts/release-create-draft.sh "$(WAITPRIMS_RELEASE_TAG)" "$(DIST_RELEASE)"
+
+release-publish: ## Maintainer guarded draft promotion
+	./scripts/release-publish.sh "$(DIST_RELEASE)"
 
 release-preflight: ## Verify all pre-tag requirements (REQUIRED before tagging)
 	@echo "Running release preflight checks..."
@@ -283,7 +302,7 @@ release-preflight: ## Verify all pre-tag requirements (REQUIRED before tagging)
 		exit 1; \
 	fi
 	@echo "[ok] Working tree is clean"
-	@$(MAKE) prepush --silent
+	@$(MAKE) pr-final --silent
 	@echo "[ok] Prepush checks passed"
 	@$(MAKE) version-check --silent
 	@echo "[ok] Version synced"
@@ -335,14 +354,14 @@ release-preflight: ## Verify all pre-tag requirements (REQUIRED before tagging)
 	@echo ""
 	@echo "[ok] All preflight checks passed - ready to tag"
 	@version_file=$$(tr -d ' \t\r\n' < $(VERSION_FILE)); \
-	echo "    Next: git tag \"v$$version_file\" -m \"Release $$version_file\""
+	echo "    Next: make release-prepare-tag-message, then reviewed release-tag"
 
 release-guard-tag-version: ## Verify tag matches VERSION file
 	./scripts/release-guard-tag-version.sh
 
 release-clean: ## Remove dist/release contents
 	@echo "Cleaning release directory..."
-	rm -rf $(DIST_RELEASE)
+	rm -rf "$(DIST_RELEASE)" "$(DIST_RELEASE).anchor"
 	@echo "[ok] Release directory cleaned"
 
 release-download: ## Download release assets from GitHub
@@ -351,18 +370,10 @@ release-download: ## Download release assets from GitHub
 		echo "or set WAITPRIMS_RELEASE_TAG to the canonical v-prefixed tag."; \
 		exit 1; \
 	fi
-	./scripts/download-release-assets.sh $(WAITPRIMS_RELEASE_TAG) $(DIST_RELEASE)
+	./scripts/release-fetch-ci-artifacts.sh "$(WAITPRIMS_RELEASE_TAG)" "$(DIST_RELEASE)"
 
-release-notes: ## Copy docs/releases/vX.Y.Z.md into dist before checksums
-	@src="docs/releases/$(WAITPRIMS_RELEASE_TAG).md"; \
-	if [ ! -f "$$src" ]; then \
-		echo "[!!] Per-cut notes not found at $$src"; \
-		echo "    Extract that version's section from RELEASE_NOTES.md"; \
-		exit 1; \
-	fi; \
-	mkdir -p "$(DIST_RELEASE)"; \
-	cp "$$src" "$(DIST_RELEASE)/release-notes-$(WAITPRIMS_RELEASE_TAG).md"; \
-	echo "[ok] Copied $$src into the checksum set"
+release-notes: ## Stage committed cut notes and approved public material
+	./scripts/release-stage-public.sh "$(DIST_RELEASE)"
 
 release-checksums: ## Generate SHA256SUMS and SHA512SUMS
 	./scripts/generate-checksums.sh $(DIST_RELEASE) $(WAITPRIMS_RELEASE_TAG)
@@ -385,16 +396,14 @@ release-export-keys: ## Export public signing keys
 	WAITPRIMS_GPG_HOMEDIR="$(WAITPRIMS_GPG_HOMEDIR)" \
 	./scripts/export-release-keys.sh $(DIST_RELEASE)
 
-release-verify-checksums: ## Verify checksums match artifacts
-	@echo "Verifying checksums..."
-	cd $(DIST_RELEASE) && shasum -a 256 -c SHA256SUMS
-	@echo "[ok] Checksums verified"
+release-verify-checksums: ## Verify both exact manifests
+	./scripts/verify-checksums.sh "$(DIST_RELEASE)"
 
 release-verify-signatures: ## Verify minisign/PGP signatures
 	./scripts/verify-signatures.sh $(DIST_RELEASE)
 
 release-verify-keys: ## Verify exported keys are public-only
-	./scripts/verify-public-keys.sh $(DIST_RELEASE)
+	./scripts/verify-staged-public.sh "$(DIST_RELEASE)"
 
 release-verify: release-verify-checksums release-verify-signatures release-verify-keys ## Run all release verification
 	@echo "[ok] All release verifications passed"
@@ -405,12 +414,13 @@ release-upload: release-verify ## Upload signed artifacts to GitHub release
 # Serialized walk only. Leaves stay independent so mid-chain targets
 # do not re-run clean/download. `.NOTPARALLEL` still blocks `make -j`.
 # Verify runs once, as the `release-upload` grouping prerequisite.
-release: release-guard-tag-version ## Full signing workflow (after CI build)
+release: ## Full signing workflow (after CI build)
 	$(MAKE) release-clean
 	$(MAKE) release-download
 	$(MAKE) release-notes
-	$(MAKE) release-checksums
-	$(MAKE) release-sign
 	$(MAKE) release-export-keys
+	$(MAKE) release-checksums
+	$(MAKE) release-create-draft
+	$(MAKE) release-sign
 	$(MAKE) release-upload
-	@echo "[ok] Release $(WAITPRIMS_RELEASE_TAG) complete"
+	@echo "[ok] Signed draft staged; separate release-publish required"

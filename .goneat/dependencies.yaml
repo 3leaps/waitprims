@@ -1,11 +1,9 @@
 # goneat Dependencies Policy Configuration
 # waitprims - GPL-free wait primitives library
 #
-# Estate-standard intent. Cooling is policy until goneat wires
-# RustAnalyzer to cooling.Checker. `languages: rust` does not enable
-# crate-age checks; `--cooling` currently passes without them.
-# Real license/source gate today is deny.toml. Do not claim this file
-# enforces crate age. syft/grype are a separate vuln/SBOM gate.
+# goneat v0.6.1 supplies Rust crate cooling metadata; it is not a required
+# CI gate here. deny.toml remains the license/source gate. Shared tooling
+# owns cooling enforcement; no bespoke cooling gate is introduced here.
 # YAML format is yamlfmt (Apache-2.0) via .yamlfmt. Do not enable yamllint.
 version: v1
 # License compliance policy
@@ -31,7 +29,7 @@ licenses:
     - Unicode-DFS-2016
     - MIT-0
 # Supply chain security (cooling policy)
-# Intent only for Rust until goneat wires CheckCooling. Do not set
+# Shared policy for the goneat Rust analyzer. Do not set
 # min_downloads_recent: crates.io "recent" is per-version lifetime
 # downloads and footguns a fresh version of a popular crate.
 # Cooling is age, not license: do not except all MIT/Apache crates.
@@ -51,13 +49,13 @@ cooling:
     - pattern: "github.com/birchton/*"
       reason: "Estate org packages"
     - pattern: "3leaps-*"
-      reason: "Estate crate names when Rust cooling is wired"
+      reason: "Estate crate names"
     - pattern: "lanyte-*"
-      reason: "Estate crate names when Rust cooling is wired"
+      reason: "Estate crate names"
     - pattern: "fulmen-*"
-      reason: "Estate crate names when Rust cooling is wired"
+      reason: "Estate crate names"
     - pattern: "birchton-*"
-      reason: "Estate crate names when Rust cooling is wired"
+      reason: "Estate crate names"
 # Policy engine configuration
 policy_engine:
   type: embedded

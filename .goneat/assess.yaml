@@ -3,7 +3,9 @@
 # This config handles GitHub Actions. YAML format is yamlfmt (Apache-2.0)
 # via .yamlfmt. Do not enable yamllint (GPL-3.0-or-later).
 #
-# goneat Rust cooling is not wired. License/source gate is deny.toml.
+# goneat v0.6.1 supports Rust cooling metadata and fails closed on format,
+# clippy execution and configuration errors. CI uses direct Rust checks;
+# cooling is not a required gate here. License/source gate is deny.toml.
 # Do not add yamllint or GPL tools.
 version: 1
 lint:

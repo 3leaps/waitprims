@@ -12,6 +12,23 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-10-07
+
+- Adopt the signed-tag, read-only artifact CI and maintainer publication
+  process in [PDR-0002](docs/decisions/PDR-0002-release-publication.md)
+- Add public GPG/minisign pins, exact tagger identity and Decernor-derived
+  text/NDJSON fingerprint anchors; stage public keys from the verified tag
+- Bind release handoff to the annotated tag object, commit and workflow
+  run/attempt; verify exact remote asset bytes before draft promotion
+- Support bounded partial/completed draft-upload recovery while rejecting
+  changed identities, unexpected asset names and published-release replacement
+- Verify local library archives on Cargo 1.88.0 with exact workspace patches;
+  keep unpatched registry checks and separately authorized uploads distinct
+- Pin release actions and SBOM tooling immutably, verify the actionlint
+  download checksum and use the macos-15 runner
+- Keep library APIs, the six public wire messages and third-party crate pins
+  unchanged; the diagnostic CLI remains unpublished on crates.io
+
 ## [0.2.2] - 2026-09-01
 
 - Add `waitprims-fs`, a native local-filesystem `Observer` backed by
@@ -109,7 +126,8 @@ APIs may still move.
 - CI matrix already on main (`fast` plus hosted smokes; arm64 labs
   same-repo only)
 
-[Unreleased]: https://github.com/3leaps/waitprims/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/3leaps/waitprims/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/3leaps/waitprims/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/3leaps/waitprims/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/3leaps/waitprims/compare/v0.1.3...v0.2.1
 [0.1.3]: https://github.com/3leaps/waitprims/compare/v0.1.2...v0.1.3

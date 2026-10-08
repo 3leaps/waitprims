@@ -20,6 +20,9 @@ relates-to:
 
 ## Status
 
+The v0.2.3 publication process is proposed in [PDR-0002](PDR-0002-release-publication.md).
+Its accepted predecessor behavior remains documented here as history.
+
 **Accepted.** Recorded from the v0.1.3 cut. Implemented in
 `RELEASE_CHECKLIST.md` in the same change.
 
